@@ -24,7 +24,7 @@ use ra_ap_project_model::{
     CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind, TargetKind,
 };
 use ra_ap_syntax::ast::{HasModuleItem as _, HasName as _, HasVisibility as _};
-use ra_ap_syntax::{AstNode as _, ast};
+use ra_ap_syntax::{AstNode as _, SyntaxNode, ast};
 use ra_ap_vfs::Vfs;
 
 use modula_ir::{
@@ -124,6 +124,8 @@ struct Builder<'db> {
     defs: Vec<(ModuleDef, ItemId)>,
     /// Functions paired with their item id, for the body-walk pass.
     functions: Vec<(hir::Function, ItemId)>,
+    /// Const/static items paired with their item id, for walking initializers.
+    value_bodies: Vec<(ItemId, ValueBody)>,
     /// `pub use` re-exports: `(re-exporting module, target item)`, including
     /// nested and glob re-exports.
     reexports: Vec<(ModuleId, ItemId)>,
@@ -143,6 +145,7 @@ impl<'db> Builder<'db> {
             item_ids: HashMap::new(),
             defs: Vec::new(),
             functions: Vec::new(),
+            value_bodies: Vec::new(),
             reexports: Vec::new(),
             edges: BTreeMap::new(),
         }
@@ -304,8 +307,11 @@ impl<'db> Builder<'db> {
             reachable_pub_api: false,
         });
 
-        if let ModuleDef::Function(function) = def {
-            self.functions.push((function, id));
+        match def {
+            ModuleDef::Function(function) => self.functions.push((function, id)),
+            ModuleDef::Const(c) => self.value_bodies.push((id, ValueBody::Const(c))),
+            ModuleDef::Static(s) => self.value_bodies.push((id, ValueBody::Static(s))),
+            _ => {}
         }
     }
 
@@ -343,6 +349,14 @@ impl<'db> Builder<'db> {
                 }
                 ModuleDef::TypeAlias(t) => {
                     let ty = t.ty(self.db);
+                    self.push_type_edges(from, &ty, RefKind::Signature);
+                }
+                ModuleDef::Const(c) => {
+                    let ty = c.ty(self.db);
+                    self.push_type_edges(from, &ty, RefKind::Signature);
+                }
+                ModuleDef::Static(s) => {
+                    let ty = s.ty(self.db);
                     self.push_type_edges(from, &ty, RefKind::Signature);
                 }
                 _ => {}
@@ -542,17 +556,31 @@ impl<'db> Builder<'db> {
         }
     }
 
-    /// Resolves references inside each function body to item-level `Body` edges.
-    /// Each body is processed in isolation so one malformed body cannot sink the
-    /// whole extraction.
+    /// Resolves references inside each function body and each const/static
+    /// initializer to item-level `Body` edges. Each body is processed in
+    /// isolation so one malformed body cannot sink the whole extraction.
     fn walk_bodies(&mut self) {
         let sema = Semantics::new(self.db);
         let db = self.db;
+
         let functions = self.functions.clone();
         for (function, from) in functions {
             let item_ids = &self.item_ids;
             let resolved = catch_unwind(AssertUnwindSafe(|| {
                 body_targets(&sema, db, item_ids, function)
+            }));
+            if let Ok(targets) = resolved {
+                for to in targets {
+                    self.add_edge(from, to, RefKind::Body);
+                }
+            }
+        }
+
+        let value_bodies = self.value_bodies.clone();
+        for (from, value) in value_bodies {
+            let item_ids = &self.item_ids;
+            let resolved = catch_unwind(AssertUnwindSafe(|| {
+                value_init_targets(&sema, db, item_ids, value)
             }));
             if let Ok(targets) = resolved {
                 for to in targets {
@@ -651,22 +679,58 @@ fn module_use_items(db: &RootDatabase, module: Module) -> Vec<ast::Use> {
         .collect()
 }
 
-/// Resolves the local items referenced inside a function body: path references,
-/// method calls, and field accesses.
+/// A const or static whose initializer body should be walked.
+#[derive(Clone, Copy)]
+enum ValueBody {
+    Const(hir::Const),
+    Static(hir::Static),
+}
+
+/// Resolves the local items referenced inside a function body.
 fn body_targets(
     sema: &Semantics<'_, RootDatabase>,
     db: &RootDatabase,
     item_ids: &HashMap<ModuleDef, ItemId>,
     function: hir::Function,
 ) -> Vec<ItemId> {
-    let mut targets = Vec::new();
     let Some(source) = sema.source(function) else {
-        return targets;
+        return Vec::new();
     };
     let Some(body) = source.value.body() else {
-        return targets;
+        return Vec::new();
     };
-    for node in body.syntax().descendants() {
+    resolve_refs(sema, db, item_ids, body.syntax())
+}
+
+/// Resolves the local items referenced inside a const/static initializer.
+fn value_init_targets(
+    sema: &Semantics<'_, RootDatabase>,
+    db: &RootDatabase,
+    item_ids: &HashMap<ModuleDef, ItemId>,
+    value: ValueBody,
+) -> Vec<ItemId> {
+    // The initializer is the first expression child of the item node; there is
+    // no `body()` accessor on `ast::Const`/`ast::Static`.
+    let item = match value {
+        ValueBody::Const(c) => sema.source(c).map(|s| s.value.syntax().clone()),
+        ValueBody::Static(s) => sema.source(s).map(|s| s.value.syntax().clone()),
+    };
+    let Some(initializer) = item.and_then(|node| node.children().find_map(ast::Expr::cast)) else {
+        return Vec::new();
+    };
+    resolve_refs(sema, db, item_ids, initializer.syntax())
+}
+
+/// Walks the descendants of `root`, resolving path references, method calls, and
+/// field accesses to local item ids.
+fn resolve_refs(
+    sema: &Semantics<'_, RootDatabase>,
+    db: &RootDatabase,
+    item_ids: &HashMap<ModuleDef, ItemId>,
+    root: &SyntaxNode,
+) -> Vec<ItemId> {
+    let mut targets = Vec::new();
+    for node in root.descendants() {
         if let Some(path) = ast::Path::cast(node.clone()) {
             if let Some(PathResolution::Def(def)) = sema.resolve_path(&path) {
                 if let Some(&to) = item_ids.get(&def) {

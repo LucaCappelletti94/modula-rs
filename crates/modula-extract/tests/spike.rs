@@ -158,6 +158,30 @@ fn field_access_produces_a_body_edge() {
 
 #[test]
 #[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn const_and_static_produce_edges() {
+    let graph = RaExtractor
+        .extract(&opts("consts"))
+        .expect("extraction succeeds");
+
+    // Body edge from a const initializer: `DERIVED = BASE + 1`.
+    assert!(
+        has_edge(&graph, "consts::DERIVED", "consts::BASE", RefKind::Body),
+        "missing initializer body edge DERIVED -> BASE"
+    );
+    // Signature edge from a static's type: `REGISTRY: Option<Registry>`.
+    assert!(
+        has_edge(
+            &graph,
+            "consts::REGISTRY",
+            "consts::Registry",
+            RefKind::Signature
+        ),
+        "missing signature edge REGISTRY -> Registry"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
 fn trait_bounds_produce_bound_edges() {
     let graph = RaExtractor
         .extract(&opts("bounds"))
