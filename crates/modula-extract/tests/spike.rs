@@ -229,6 +229,53 @@ fn const_and_static_produce_edges() {
 
 #[test]
 #[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn std_generic_wrappers_resolve_to_local_type_arguments() {
+    let graph = RaExtractor
+        .extract(&opts("stdgen"))
+        .expect("extraction succeeds");
+
+    // Each std-library wrapper (`Vec`, `Option`, `Box`, `Result`) resolves with
+    // the sysroot enabled, so the type walk descends into the local argument and
+    // emits a signature edge to it.
+    assert!(
+        has_edge(
+            &graph,
+            "stdgen::Holder",
+            "stdgen::Local",
+            RefKind::Signature
+        ),
+        "missing Vec<Local> field edge Holder -> Local"
+    );
+    assert!(
+        has_edge(&graph, "stdgen::first", "stdgen::Local", RefKind::Signature),
+        "missing Option<Local> return edge first -> Local"
+    );
+    assert!(
+        has_edge(&graph, "stdgen::boxed", "stdgen::Local", RefKind::Signature),
+        "missing Box<Local> return edge boxed -> Local"
+    );
+    assert!(
+        has_edge(
+            &graph,
+            "stdgen::fallible",
+            "stdgen::Local",
+            RefKind::Signature
+        ),
+        "missing Result<Local, _> ok-arm edge fallible -> Local"
+    );
+    assert!(
+        has_edge(
+            &graph,
+            "stdgen::fallible",
+            "stdgen::Failure",
+            RefKind::Signature
+        ),
+        "missing Result<_, Failure> err-arm edge fallible -> Failure"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
 fn trait_bounds_produce_bound_edges() {
     let graph = RaExtractor
         .extract(&opts("bounds"))

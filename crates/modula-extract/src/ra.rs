@@ -21,7 +21,7 @@ use ra_ap_ide::{Edition, RootDatabase};
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace};
 use ra_ap_paths::{AbsPathBuf, Utf8PathBuf};
 use ra_ap_project_model::{
-    CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind, TargetKind,
+    CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind, RustLibSource, TargetKind,
 };
 use ra_ap_syntax::ast::{HasModuleItem as _, HasName as _, HasVisibility as _};
 use ra_ap_syntax::{AstNode as _, SyntaxNode, ast};
@@ -44,7 +44,16 @@ pub struct RaExtractor;
 
 impl Extractor for RaExtractor {
     fn extract(&self, opts: &ExtractOptions) -> anyhow::Result<CrateGraph> {
-        let cargo_config = CargoConfig::default();
+        // The sysroot is always enabled so std-library generic wrappers (`Vec`,
+        // `Option`, `Box`, `Result`, ...) resolve. This lets the type walk
+        // descend into a local type argument like `Vec<Local>` and emit the edge
+        // to `Local`. Without it those wrappers are unknown and the local
+        // argument is invisible. The cost is a roughly fixed ~4s/~500MB per run
+        // (release) for loading and indexing std.
+        let cargo_config = CargoConfig {
+            sysroot: Some(RustLibSource::Discover),
+            ..Default::default()
+        };
         let load_config = LoadCargoConfig {
             load_out_dirs_from_check: false,
             with_proc_macro_server: ProcMacroServerChoice::None,
