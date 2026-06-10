@@ -223,16 +223,36 @@ fn pub_use_reexport_marks_item_as_public_api() {
         .extract(&opts("reexport"))
         .expect("extraction succeeds");
 
-    let hidden = graph
-        .items
-        .iter()
-        .find(|i| i.canonical_path == "reexport::private::Hidden")
-        .expect("reexport::private::Hidden extracted");
-    // Although `Hidden` lives in a private module, it is `pub use`-re-exported
-    // from the crate root, so it is public API.
+    let is_public = |path: &str| {
+        graph
+            .items
+            .iter()
+            .find(|i| i.canonical_path == path)
+            .unwrap_or_else(|| panic!("{path} extracted"))
+            .reachable_pub_api
+    };
+
+    // Every re-export form exposes its target as public API, even though they
+    // live in private modules.
+    assert!(is_public("reexport::private::Hidden"), "simple pub use");
+    assert!(is_public("reexport::private::Nested1"), "nested pub use");
+    assert!(is_public("reexport::private::Nested2"), "nested pub use");
+    assert!(is_public("reexport::globbed::Globbed"), "glob pub use");
     assert!(
-        hidden.reachable_pub_api,
-        "re-exported Hidden should be public API"
+        is_public("reexport::globbed::globbed_fn"),
+        "glob pub use fn"
+    );
+    assert!(is_public("reexport::private::Renamed"), "renamed pub use");
+
+    // Negative cases: pub(crate) and private re-exports do NOT make their
+    // targets public API (over-marking would suppress real over-exposure).
+    assert!(
+        !is_public("reexport::private::OnlyCrate"),
+        "pub(crate) use must not be public API"
+    );
+    assert!(
+        !is_public("reexport::private::OnlyPrivate"),
+        "private use must not be public API"
     );
 }
 

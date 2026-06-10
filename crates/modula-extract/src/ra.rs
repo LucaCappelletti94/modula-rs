@@ -124,7 +124,8 @@ struct Builder<'db> {
     defs: Vec<(ModuleDef, ItemId)>,
     /// Functions paired with their item id, for the body-walk pass.
     functions: Vec<(hir::Function, ItemId)>,
-    /// `pub use` re-exports: `(re-exporting module, target item)`.
+    /// `pub use` re-exports: `(re-exporting module, target item)`, including
+    /// nested and glob re-exports.
     reexports: Vec<(ModuleId, ItemId)>,
     /// Edge multiplicities, keyed by `(from, to, kind)`.
     edges: BTreeMap<(ItemId, ItemId, RefKind), u32>,
@@ -371,41 +372,69 @@ impl<'db> Builder<'db> {
         }
     }
 
-    /// Records `pub use` re-exports: `(re-exporting module, target item)` for
-    /// each simple `pub use path::Item;` (nested and glob re-exports are not yet
-    /// handled). The re-exported name is resolved through the module's scope,
-    /// since `resolve_path` does not handle use-tree paths.
+    /// Records `pub use` re-exports as `(re-exporting module, target item)`,
+    /// handling simple (`pub use a::B`), nested (`pub use a::{B, C}`), and glob
+    /// (`pub use a::*`) re-exports.
     fn collect_reexports(&mut self) {
         let modules: Vec<(Module, ModuleId)> =
             self.module_ids.iter().map(|(m, id)| (*m, *id)).collect();
         for (module, module_id) in modules {
-            // Names brought in by a plain `pub use` (not pub(crate)/pub(super)).
-            let pub_use_names: Vec<String> = module_use_items(self.db, module)
-                .into_iter()
-                .filter(|use_item| {
-                    use_item
-                        .visibility()
-                        .is_some_and(|v| v.visibility_inner().is_none())
-                })
-                .filter_map(|use_item| reexport_name(&use_item))
-                .collect();
-            if pub_use_names.is_empty() {
-                continue;
-            }
-
             let edition = module.krate(self.db).edition(self.db);
-            let scope: HashMap<String, ModuleDef> = module
-                .scope(self.db, None)
-                .into_iter()
-                .filter_map(|(name, scope_def)| match scope_def {
-                    ScopeDef::ModuleDef(def) => {
-                        Some((name.display(self.db, edition).to_string(), def))
-                    }
-                    _ => None,
-                })
-                .collect();
+            let scope = self.scope_map(module, edition);
+            for use_item in module_use_items(self.db, module) {
+                // Only plain `pub use` (not pub(crate)/pub(super)) re-exports
+                // contribute to the public API.
+                let is_pub = use_item
+                    .visibility()
+                    .is_some_and(|v| v.visibility_inner().is_none());
+                if !is_pub {
+                    continue;
+                }
+                if let Some(tree) = use_item.use_tree() {
+                    self.collect_use_tree(module, module_id, &scope, edition, &tree, &[]);
+                }
+            }
+        }
+    }
 
-            for name in pub_use_names {
+    /// Recursively walks a use tree, recording each re-exported local item.
+    /// `prefix` is the path accumulated from enclosing nested trees.
+    fn collect_use_tree(
+        &mut self,
+        module: Module,
+        module_id: ModuleId,
+        scope: &HashMap<String, ModuleDef>,
+        edition: Edition,
+        tree: &ast::UseTree,
+        prefix: &[String],
+    ) {
+        let mut full = prefix.to_vec();
+        full.extend(tree.path().map(path_segments).unwrap_or_default());
+
+        if let Some(list) = tree.use_tree_list() {
+            for subtree in list.use_trees() {
+                self.collect_use_tree(module, module_id, scope, edition, &subtree, &full);
+            }
+        } else if tree.star_token().is_some() {
+            // `pub use prefix::*`: re-export the public items of `prefix`.
+            if let Some(target) = self.resolve_module_path(module, scope, edition, &full) {
+                for def in target.declarations(self.db) {
+                    if matches!(def.visibility(self.db), hir::Visibility::Public) {
+                        if let Some(&to) = self.item_ids.get(&def) {
+                            self.reexports.push((module_id, to));
+                        }
+                    }
+                }
+            }
+        } else {
+            // `pub use prefix::Item [as Alias]`: the name brought into scope is
+            // the alias or the path's last segment.
+            let name = tree
+                .rename()
+                .and_then(|r| r.name())
+                .map(|n| n.text().to_string())
+                .or_else(|| full.last().cloned());
+            if let Some(name) = name {
                 if let Some(def) = scope.get(&name) {
                     if let Some(&to) = self.item_ids.get(def) {
                         self.reexports.push((module_id, to));
@@ -413,6 +442,51 @@ impl<'db> Builder<'db> {
                 }
             }
         }
+    }
+
+    /// Builds a `name -> ModuleDef` map of a module's scope.
+    fn scope_map(&self, module: Module, edition: Edition) -> HashMap<String, ModuleDef> {
+        module
+            .scope(self.db, None)
+            .into_iter()
+            .filter_map(|(name, scope_def)| match scope_def {
+                ScopeDef::ModuleDef(def) => Some((name.display(self.db, edition).to_string(), def)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Resolves a path (the segments of a glob's prefix) to a module, following
+    /// `crate`/`self`/`super` and descending through child modules.
+    fn resolve_module_path(
+        &self,
+        module: Module,
+        scope: &HashMap<String, ModuleDef>,
+        edition: Edition,
+        segments: &[String],
+    ) -> Option<Module> {
+        let (first, rest) = segments.split_first()?;
+        let mut current = match first.as_str() {
+            "crate" => module.krate(self.db).root_module(self.db),
+            "self" => module,
+            "super" => module.parent(self.db)?,
+            name => match scope.get(name)? {
+                ModuleDef::Module(m) => *m,
+                _ => return None,
+            },
+        };
+        for segment in rest {
+            if segment == "super" {
+                current = current.parent(self.db)?;
+                continue;
+            }
+            current = current.children(self.db).find(|child| {
+                child
+                    .name(self.db)
+                    .is_some_and(|n| n.display(self.db, edition).to_string() == *segment)
+            })?;
+        }
+        Some(current)
     }
 
     /// Adds `TraitBound` edges from each item to the local traits named in its
@@ -529,17 +603,32 @@ impl<'db> Builder<'db> {
     }
 }
 
-/// The name a simple `pub use` brings into scope (the `as` rename if present,
-/// otherwise the path's last segment). Returns `None` for nested or glob uses.
-fn reexport_name(use_item: &ast::Use) -> Option<String> {
-    let tree = use_item.use_tree()?;
-    if !tree.is_simple_path() {
-        return None;
+/// The segments of a path as plain strings (`crate`/`self`/`super` keywords are
+/// kept as those words).
+fn path_segments(path: ast::Path) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = Some(path);
+    while let Some(node) = current {
+        if let Some(text) = node.segment().and_then(|seg| segment_text(&seg)) {
+            segments.push(text);
+        }
+        current = node.qualifier();
     }
-    if let Some(rename) = tree.rename() {
-        return rename.name().map(|n| n.text().to_string());
+    segments.reverse();
+    segments
+}
+
+/// The text of a single path segment.
+fn segment_text(segment: &ast::PathSegment) -> Option<String> {
+    if segment.crate_token().is_some() {
+        return Some("crate".to_owned());
     }
-    let segment = tree.path()?.segment()?;
+    if segment.self_token().is_some() {
+        return Some("self".to_owned());
+    }
+    if segment.super_token().is_some() {
+        return Some("super".to_owned());
+    }
     segment.name_ref().map(|n| n.text().to_string())
 }
 
