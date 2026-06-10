@@ -101,6 +101,12 @@ expression: normalized(&graph)
       "owning_module": "rich::types",
       "path": "rich::types::Outer",
       "visibility": "Public"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "rich::types",
+      "path": "rich::types::greet",
+      "visibility": "Public"
     }
   ],
   "modules": [

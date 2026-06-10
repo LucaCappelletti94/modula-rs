@@ -158,6 +158,53 @@ fn field_access_produces_a_body_edge() {
 
 #[test]
 #[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn trait_items_impl_bounds_and_impl_trait_produce_edges() {
+    let graph = RaExtractor
+        .extract(&opts("traits"))
+        .expect("extraction succeeds");
+
+    // Trait method signature: `Store::describe(&self) -> Record` (associated
+    // items are module-qualified, so the path is `traits::describe`).
+    assert!(
+        has_edge(
+            &graph,
+            "traits::describe",
+            "traits::Record",
+            RefKind::Signature
+        ),
+        "missing trait method signature edge describe -> Record"
+    );
+    // Trait default method body: `helper` calls `describe`.
+    assert!(
+        has_edge(&graph, "traits::helper", "traits::describe", RefKind::Body),
+        "missing default-body edge helper -> describe"
+    );
+    // Impl generic bound: `impl<T: Marker> Pair<T>`.
+    assert!(
+        has_edge(
+            &graph,
+            "traits::Pair",
+            "traits::Marker",
+            RefKind::TraitBound
+        ),
+        "missing impl bound edge Pair -> Marker"
+    );
+    // impl-Trait return: `provide() -> impl Marker`.
+    assert!(
+        has_edge(
+            &graph,
+            "traits::provide",
+            "traits::Marker",
+            RefKind::Signature
+        ),
+        "missing impl-Trait return edge provide -> Marker"
+    );
+
+    insta::assert_json_snapshot!(normalized(&graph));
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
 fn const_and_static_produce_edges() {
     let graph = RaExtractor
         .extract(&opts("consts"))

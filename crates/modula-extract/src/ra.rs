@@ -97,6 +97,7 @@ impl Extractor for RaExtractor {
             for krate in &kept {
                 builder.add_impls(*krate);
             }
+            builder.add_trait_items();
             builder.add_signature_edges();
             builder.add_trait_bound_edges();
             builder.add_import_edges();
@@ -252,17 +253,57 @@ impl<'db> Builder<'db> {
                 self.add_item(def, crate_id, owning, module, edition);
             }
 
-            // Couple the implementing type to the implemented trait.
-            if let (Some(self_adt), Some(trait_)) =
-                (imp.self_ty(self.db).as_adt(), imp.trait_(self.db))
-            {
-                let self_def = ModuleDef::from(self_adt);
-                let trait_def = ModuleDef::Trait(trait_);
-                if let (Some(&from), Some(&to)) =
-                    (self.item_ids.get(&self_def), self.item_ids.get(&trait_def))
-                {
-                    self.add_edge(from, to, RefKind::Impl);
+            // From the implementing type: an `Impl` edge to the implemented
+            // trait, and `TraitBound` edges to the traits in the impl's bounds.
+            if let Some(self_adt) = imp.self_ty(self.db).as_adt() {
+                if let Some(&from) = self.item_ids.get(&ModuleDef::from(self_adt)) {
+                    if let Some(trait_) = imp.trait_(self.db) {
+                        if let Some(&to) = self.item_ids.get(&ModuleDef::Trait(trait_)) {
+                            self.add_edge(from, to, RefKind::Impl);
+                        }
+                    }
+                    for param in GenericDef::Impl(imp).type_or_const_params(self.db) {
+                        if let Some(type_param) = param.as_type_param(self.db) {
+                            for bound in type_param.trait_bounds(self.db) {
+                                if let Some(&to) = self.item_ids.get(&ModuleDef::Trait(bound)) {
+                                    self.add_edge(from, to, RefKind::TraitBound);
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    /// Walks every trait's associated items (methods, consts, types), adding them
+    /// as first-class items so their signatures, default bodies, and bounds
+    /// contribute edges. The mirror of [`add_impls`](Self::add_impls).
+    fn add_trait_items(&mut self) {
+        let traits: Vec<hir::Trait> = self
+            .defs
+            .iter()
+            .filter_map(|(def, _)| match def {
+                ModuleDef::Trait(t) => Some(*t),
+                _ => None,
+            })
+            .collect();
+        for trait_ in traits {
+            let module = trait_.module(self.db);
+            let Some(&owning) = self.module_ids.get(&module) else {
+                continue;
+            };
+            let Some(&crate_id) = self.crate_ids.get(&module.krate(self.db)) else {
+                continue;
+            };
+            let edition = module.krate(self.db).edition(self.db);
+            for assoc in trait_.items(self.db) {
+                let def = match assoc {
+                    AssocItem::Function(f) => ModuleDef::Function(f),
+                    AssocItem::Const(c) => ModuleDef::Const(c),
+                    AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
+                };
+                self.add_item(def, crate_id, owning, module, edition);
             }
         }
     }
@@ -547,6 +588,9 @@ impl<'db> Builder<'db> {
                 targets.push(ModuleDef::from(adt));
             } else if let Some(trait_) = t.as_dyn_trait() {
                 targets.push(ModuleDef::Trait(trait_));
+            } else if let Some(impl_traits) = t.as_impl_traits(self.db) {
+                // `impl Trait` positions resolve to their bound traits.
+                targets.extend(impl_traits.map(ModuleDef::Trait));
             }
         });
         for target in targets {
