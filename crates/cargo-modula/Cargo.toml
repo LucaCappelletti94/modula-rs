@@ -1,0 +1,19 @@
+[package]
+name = "cargo-modula"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cargo subcommand that scores how well a Rust crate's module tree matches its actual dependency graph."
+
+[[bin]]
+name = "cargo-modula"
+path = "src/main.rs"
+
+[dependencies]
+modula-extract.workspace = true
+modula-metrics.workspace = true
+clap.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,78 @@
+---
+source: crates/modula-extract/tests/spike.rs
+expression: normalized(&graph)
+---
+{
+  "edges": [
+    {
+      "from": "spike::b::g",
+      "kind": "Body",
+      "to": "spike",
+      "weight": 1
+    },
+    {
+      "from": "spike::b::g",
+      "kind": "Body",
+      "to": "spike::a",
+      "weight": 1
+    },
+    {
+      "from": "spike::b::g",
+      "kind": "Body",
+      "to": "spike::a::f",
+      "weight": 1
+    }
+  ],
+  "items": [
+    {
+      "kind": "Module",
+      "owning_module": "spike",
+      "path": "spike",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Module",
+      "owning_module": "spike::a",
+      "path": "spike::a",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "spike::a",
+      "path": "spike::a::f",
+      "visibility": "Crate"
+    },
+    {
+      "kind": "Module",
+      "owning_module": "spike::b",
+      "path": "spike::b",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "spike::b",
+      "path": "spike::b::g",
+      "visibility": "Public"
+    }
+  ],
+  "modules": [
+    {
+      "depth": 0,
+      "parent": null,
+      "path": "spike",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "parent": "spike",
+      "path": "spike::a",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "parent": "spike",
+      "path": "spike::b",
+      "visibility": "Public"
+    }
+  ]
+}

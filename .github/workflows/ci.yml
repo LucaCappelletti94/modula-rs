@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fast tier: the pure crates (no rust-analyzer). These build and test in seconds.
+  fast:
+    name: Fast (ir + metrics)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (ir + metrics)
+        run: cargo clippy -p modula-ir -p modula-metrics --all-targets -- -D warnings
+      - name: Test (ir + metrics)
+        run: cargo test -p modula-ir -p modula-metrics
+
+  # Slow tier: the rust-analyzer extractor. Heavy build, needs a proc-macro
+  # server, so its integration tests are marked #[ignore] and run explicitly.
+  slow:
+    name: Slow (extract)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build extractor and CLI
+        run: cargo build -p modula-extract -p cargo-modula
+      - name: Test (extract, including ignored integration tests)
+        run: cargo test -p modula-extract -- --include-ignored

@@ -1,0 +1,21 @@
+[package]
+name = "modula-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Modularity metrics for modula-rs: divergence, induced modularity, coupling, cycles, encapsulation, and the composite score."
+
+[dependencies]
+modula-ir.workspace = true
+geometric-traits.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+approx.workspace = true
