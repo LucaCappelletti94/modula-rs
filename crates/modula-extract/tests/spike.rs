@@ -210,6 +210,42 @@ fn trait_items_impl_bounds_and_impl_trait_produce_edges() {
 
 #[test]
 #[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn enum_and_union_fields_produce_signature_edges() {
+    use modula_ir::ItemKind;
+
+    let graph = RaExtractor
+        .extract(&opts("adts"))
+        .expect("extraction succeeds");
+
+    let kind_of = |path: &str| {
+        graph
+            .items
+            .iter()
+            .find(|i| i.canonical_path == path)
+            .unwrap_or_else(|| panic!("{path} extracted"))
+            .kind
+    };
+    assert_eq!(kind_of("adts::Message"), ItemKind::Enum);
+    assert_eq!(kind_of("adts::Raw"), ItemKind::Union);
+
+    // Enum variant fields couple the enum to the local types they carry.
+    assert!(
+        has_edge(&graph, "adts::Message", "adts::Payload", RefKind::Signature),
+        "missing enum variant field edge Message -> Payload"
+    );
+    assert!(
+        has_edge(&graph, "adts::Message", "adts::Header", RefKind::Signature),
+        "missing struct-variant field edge Message -> Header"
+    );
+    // Union fields couple the union to the local types they carry.
+    assert!(
+        has_edge(&graph, "adts::Raw", "adts::Payload", RefKind::Signature),
+        "missing union field edge Raw -> Payload"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
 fn const_and_static_produce_edges() {
     let graph = RaExtractor
         .extract(&opts("consts"))
