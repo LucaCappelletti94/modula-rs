@@ -422,6 +422,46 @@ fn target_filtering_excludes_tests_and_marks_public_api() {
 
 #[test]
 #[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn function_like_proc_macro_in_body_is_resolved() {
+    let graph = RaExtractor
+        .extract(&opts("procfn"))
+        .expect("extraction succeeds");
+
+    // `call_local!()` expands to `local_target()`; the edge exists only via
+    // descent into the function-like proc-macro expansion.
+    assert!(
+        has_edge(
+            &graph,
+            "procfn::via_function_like",
+            "procfn::local_target",
+            RefKind::Body
+        ),
+        "missing body edge via_function_like -> local_target"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn attribute_proc_macro_rewritten_body_is_resolved() {
+    let graph = RaExtractor
+        .extract(&opts("procfn"))
+        .expect("extraction succeeds");
+
+    // `#[wrap]` rewrites the body to `local_target()`; the edge exists only if
+    // the expanded (not the source) body is walked.
+    assert!(
+        has_edge(
+            &graph,
+            "procfn::via_attribute",
+            "procfn::local_target",
+            RefKind::Body
+        ),
+        "missing body edge via_attribute -> local_target"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
 fn glob_reexport_chain_marks_item_public_api() {
     let graph = RaExtractor
         .extract(&opts("globchain"))
