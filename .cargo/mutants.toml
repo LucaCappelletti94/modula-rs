@@ -1,0 +1,12 @@
+# cargo-mutants configuration.
+#
+# Only the pure crates (modula-ir, modula-metrics) are mutation-tested. The
+# rust-analyzer extractor (modula-extract) and the CLI (cargo-modula) have their
+# meaningful tests marked #[ignore] - each run costs a full rust-analyzer build
+# plus a live extraction - so mutating them is infeasible and every mutant would
+# falsely survive.
+examine_globs = ["crates/modula-ir/**/*.rs", "crates/modula-metrics/**/*.rs"]
+
+# Test each mutant against only the package it lives in, so a mutation never
+# forces a rebuild of the heavy ra_ap_* dependency tree.
+test_workspace = false
