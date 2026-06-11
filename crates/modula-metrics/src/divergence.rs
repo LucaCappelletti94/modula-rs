@@ -321,3 +321,82 @@ fn ln_gamma(x: f64) -> f64 {
         0.5 * (2.0 * PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
     }
 }
+
+#[cfg(test)]
+mod unit_tests {
+    use super::{Divergence, comb2, entropy, ln_factorial, ln_gamma};
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn comb2_matches_closed_form() {
+        assert_eq!(comb2(0), 0.0);
+        assert_eq!(comb2(1), 0.0);
+        assert_eq!(comb2(2), 1.0);
+        assert_eq!(comb2(4), 6.0); // 4*3/2
+        assert_eq!(comb2(5), 10.0);
+    }
+
+    #[test]
+    fn ln_gamma_matches_known_values() {
+        assert!(close(ln_gamma(1.0), 0.0)); // gamma(1) = 1
+        assert!(close(ln_gamma(2.0), 0.0)); // gamma(2) = 1
+        assert!(close(ln_gamma(5.0), 24.0_f64.ln())); // gamma(5) = 4! = 24
+        assert!(close(ln_gamma(0.5), std::f64::consts::PI.sqrt().ln())); // gamma(1/2) = sqrt(pi)
+        assert!(close(ln_factorial(5), 120.0_f64.ln())); // 5! = 120
+    }
+
+    #[test]
+    fn ln_gamma_reflection_branch() {
+        use std::f64::consts::PI;
+        // x < 0.5 takes the reflection formula. Verify it satisfies Euler's
+        // reflection identity gamma(x) gamma(1-x) = pi / sin(pi x), i.e.
+        // ln_gamma(x) + ln_gamma(1-x) == ln(pi) - ln(sin(pi x)). Only ln_gamma(x)
+        // uses the mutated branch here (1-x = 0.75 takes the Lanczos branch).
+        let x = 0.25_f64;
+        let lhs = ln_gamma(x) + ln_gamma(1.0 - x);
+        let rhs = PI.ln() - (PI * x).sin().ln();
+        assert!(close(lhs, rhs));
+    }
+
+    #[test]
+    fn entropy_known_value_and_zero_count_guard() {
+        // Two equal clusters of 2 over n = 4: H = ln 2.
+        assert!(close(entropy(&[2, 2], 4), 2.0_f64.ln()));
+        // A zero count must be skipped, not produce NaN.
+        let h = entropy(&[2, 0, 2], 4);
+        assert!(h.is_finite() && close(h, 2.0_f64.ln()));
+        // n == 0 short-circuits.
+        assert_eq!(entropy(&[], 0), 0.0);
+    }
+
+    #[test]
+    fn identical_partitions_have_zero_divergence() {
+        let a = [0usize, 0, 1, 1];
+        let d = Divergence::compute(&a, &a);
+        assert!(d.vi.abs() < 1e-12, "VI of identical partitions is 0");
+        assert!(close(d.ami, 1.0), "AMI of identical partitions is 1");
+        assert!(close(d.ari, 1.0), "ARI of identical partitions is 1");
+        assert!(d.h_a_given_b.abs() < 1e-12);
+        assert!(d.h_b_given_a.abs() < 1e-12);
+    }
+
+    #[test]
+    fn orthogonal_partitions_diverge_with_normalized_vi() {
+        let a = [0usize, 0, 1, 1];
+        let b = [0usize, 1, 0, 1];
+        let d = Divergence::compute(&a, &b);
+        assert!(d.vi > 0.0, "orthogonal partitions have positive VI");
+        // Normalized VI stays in (0, 1].
+        assert!(d.vi_normalized > 0.0 && d.vi_normalized <= 1.0 + 1e-12);
+    }
+
+    #[test]
+    fn normalized_vi_is_zero_for_a_singleton() {
+        // n == 1: the `ct.n > 1` guard must return 0, never divide by ln(1) = 0.
+        let d = Divergence::compute(&[0usize], &[0usize]);
+        assert_eq!(d.vi_normalized, 0.0);
+    }
+}

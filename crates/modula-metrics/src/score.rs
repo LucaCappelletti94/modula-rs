@@ -168,3 +168,79 @@ fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
     }
     (count > 0).then(|| sum / count as f64)
 }
+
+#[cfg(test)]
+mod unit_tests {
+    use super::{acyclicity, encapsulation_term, mean, mean_efficiency, weighted};
+    use crate::cycles::TangleReport;
+    use crate::encapsulation::EncapsulationReport;
+    use crate::modularity::DepthRecord;
+    use modula_ir::ModuleId;
+
+    fn depth_record(eff_u: Option<f64>, eff_d: Option<f64>) -> DepthRecord {
+        DepthRecord {
+            depth: 1,
+            communities_declared: 2,
+            q_declared_undirected: 0.0,
+            q_declared_directed: 0.0,
+            q_detected_undirected: 0.0,
+            q_detected_directed: 0.0,
+            efficiency_undirected: eff_u,
+            efficiency_directed: eff_d,
+        }
+    }
+
+    fn encapsulation(over: f64, leak: f64) -> EncapsulationReport {
+        EncapsulationReport {
+            over_exposed: Vec::new(),
+            over_exposed_fraction: over,
+            deepest_leaks: Vec::new(),
+            mean_leak_cost: leak,
+        }
+    }
+
+    #[test]
+    fn mean_of_values_and_empty() {
+        assert!((mean([0.2, 0.4].into_iter()).unwrap() - 0.3).abs() < 1e-12);
+        assert_eq!(mean(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn weighted_average_over_present_terms() {
+        // (1*0.2 + 3*0.6) / (1 + 3) = 2.0 / 4 = 0.5; the None term is skipped.
+        let w = weighted(&[(1.0, Some(0.2)), (3.0, Some(0.6)), (2.0, None)]);
+        assert!((w - 0.5).abs() < 1e-12);
+        // No present terms -> zero weight -> 0.0 (never divides by zero).
+        assert_eq!(weighted(&[(1.0, None)]), 0.0);
+    }
+
+    #[test]
+    fn acyclicity_is_fraction_of_nodes_outside_cycles() {
+        let tangles = TangleReport {
+            sccs: vec![vec![ModuleId(0), ModuleId(1)]],
+            circuits: Vec::new(),
+            is_acyclic: false,
+            largest_scc: 2,
+            circuits_truncated: false,
+        };
+        // 2 of 4 nodes in cycles -> 1 - 2/4 = 0.5.
+        assert!((acyclicity(&tangles, 4) - 0.5).abs() < 1e-12);
+        // No module nodes -> perfectly acyclic.
+        assert_eq!(acyclicity(&tangles, 0), 1.0);
+    }
+
+    #[test]
+    fn encapsulation_term_blends_exposure_and_leak() {
+        // exposure = 1 - 0.2 = 0.8, leak = 1 - 0.4 = 0.6 -> 0.5*0.8 + 0.5*0.6 = 0.7.
+        assert!((encapsulation_term(&encapsulation(0.2, 0.4)) - 0.7).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mean_efficiency_averages_present_efficiencies() {
+        assert!(
+            (mean_efficiency(&depth_record(Some(0.4), Some(0.8))).unwrap() - 0.6).abs() < 1e-12
+        );
+        assert!((mean_efficiency(&depth_record(Some(0.4), None)).unwrap() - 0.4).abs() < 1e-12);
+        assert_eq!(mean_efficiency(&depth_record(None, None)), None);
+    }
+}
