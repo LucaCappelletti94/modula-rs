@@ -1,0 +1,13 @@
+[package]
+name = "procderive"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+procderive_macro = { path = "procderive_macro" }
+
+[workspace]
+members = ["procderive_macro"]

@@ -420,6 +420,46 @@ fn target_filtering_excludes_tests_and_marks_public_api() {
     );
 }
 
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn derive_macro_generates_impl_edge() {
+    let graph = RaExtractor
+        .extract(&opts("procderive"))
+        .expect("extraction succeeds");
+
+    // `#[derive(Tag)]` expands to `impl Tag for Tagged {}`; with the proc-macro
+    // server enabled that generated impl is a real internal `Impl` edge.
+    assert!(
+        has_edge(
+            &graph,
+            "procderive::Tagged",
+            "procderive::Tag",
+            RefKind::Impl
+        ),
+        "missing derive-generated impl edge Tagged -> Tag"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn macro_call_body_descent_captures_inner_reference() {
+    let graph = RaExtractor
+        .extract(&opts("bodymacro"))
+        .expect("extraction succeeds");
+
+    // `build`'s only reference to `make_marker` is inside the `marker!()`
+    // expansion, so the edge exists only if the body walk descends into macros.
+    assert!(
+        has_edge(
+            &graph,
+            "bodymacro::build",
+            "bodymacro::make_marker",
+            RefKind::Body
+        ),
+        "missing macro-expansion body edge build -> make_marker"
+    );
+}
+
 /// Helpers to query edges by canonical path and kind.
 fn has_edge(graph: &CrateGraph, from: &str, to: &str, kind: RefKind) -> bool {
     graph.edges.iter().any(|e| {

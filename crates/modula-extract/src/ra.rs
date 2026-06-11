@@ -55,8 +55,11 @@ impl Extractor for RaExtractor {
             ..Default::default()
         };
         let load_config = LoadCargoConfig {
-            load_out_dirs_from_check: false,
-            with_proc_macro_server: ProcMacroServerChoice::None,
+            // Runs `cargo check` to populate build-script `OUT_DIR`s and, crucially,
+            // to discover the compiled proc-macro dylibs the server dlopens. Derive
+            // and other proc-macro expansion does not happen without this.
+            load_out_dirs_from_check: true,
+            with_proc_macro_server: ProcMacroServerChoice::Sysroot,
             prefill_caches: false,
             num_worker_threads: 1,
             proc_macro_processes: 1,
@@ -67,8 +70,18 @@ impl Extractor for RaExtractor {
         // its cargo target metadata), and pick the lib/bin target roots to keep.
         let manifest_abs = absolute_manifest(&opts.manifest_path)?;
         let manifest = ProjectManifest::discover_single(manifest_abs.as_path())?;
-        let workspace = ProjectWorkspace::load(manifest, &cargo_config, &progress)?;
+        let mut workspace = ProjectWorkspace::load(manifest, &cargo_config, &progress)?;
         let selection = select_targets(&workspace, &manifest_abs, opts)?;
+
+        // The low-level `load_workspace` (unlike `load_workspace_at`) does not act
+        // on `load_out_dirs_from_check`; it expects build scripts to be attached
+        // already. Running them builds the proc-macro dylibs the server dlopens
+        // and populates build-script `OUT_DIR`s, without which no proc-macro
+        // (derives included) ever expands.
+        if load_config.load_out_dirs_from_check {
+            let build_scripts = workspace.run_build_scripts(&cargo_config, &progress)?;
+            workspace.set_build_scripts(build_scripts);
+        }
 
         let (db, vfs, _proc_macro) =
             load_workspace(workspace, &cargo_config.extra_env, &load_config)?;
@@ -775,7 +788,7 @@ fn value_init_targets(
 }
 
 /// Walks the descendants of `root`, resolving path references, method calls, and
-/// field accesses to local item ids.
+/// field accesses to local item ids, descending into macro-call expansions.
 fn resolve_refs(
     sema: &Semantics<'_, RootDatabase>,
     db: &RootDatabase,
@@ -783,6 +796,24 @@ fn resolve_refs(
     root: &SyntaxNode,
 ) -> Vec<ItemId> {
     let mut targets = Vec::new();
+    collect_refs(sema, db, item_ids, root, 0, &mut targets);
+    targets
+}
+
+/// Resolves references in `root`, recursing into each macro-call expansion so
+/// items referenced only inside a macro body are captured. `depth` bounds the
+/// recursion against pathologically deep (or cyclic) macro expansion.
+fn collect_refs(
+    sema: &Semantics<'_, RootDatabase>,
+    db: &RootDatabase,
+    item_ids: &HashMap<ModuleDef, ItemId>,
+    root: &SyntaxNode,
+    depth: u32,
+    targets: &mut Vec<ItemId>,
+) {
+    /// Caps macro-expansion recursion; real call graphs nest far shallower.
+    const MAX_MACRO_DEPTH: u32 = 16;
+
     for node in root.descendants() {
         if let Some(path) = ast::Path::cast(node.clone()) {
             if let Some(PathResolution::Def(def)) = sema.resolve_path(&path) {
@@ -796,7 +827,7 @@ fn resolve_refs(
                     targets.push(to);
                 }
             }
-        } else if let Some(field_expr) = ast::FieldExpr::cast(node) {
+        } else if let Some(field_expr) = ast::FieldExpr::cast(node.clone()) {
             // A field access `x.field` couples to the ADT that owns the field.
             if let Some(field) = sema.resolve_field(&field_expr).and_then(|f| f.left()) {
                 let owner = ModuleDef::from(field.parent_def(db));
@@ -804,9 +835,16 @@ fn resolve_refs(
                     targets.push(to);
                 }
             }
+        } else if let Some(macro_call) = ast::MacroCall::cast(node) {
+            // The references a macro introduces live in its expansion, not the
+            // call site, so resolve them by walking the expanded syntax.
+            if depth < MAX_MACRO_DEPTH {
+                if let Some(expanded) = sema.expand_macro_call(&macro_call) {
+                    collect_refs(sema, db, item_ids, &expanded.value, depth + 1, targets);
+                }
+            }
         }
     }
-    targets
 }
 
 /// The lib/bin target root paths to analyze, plus the root lib target's path.
