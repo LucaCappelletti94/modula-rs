@@ -44,6 +44,27 @@ jobs:
       - name: Test (extract + cli, including ignored integration tests)
         run: cargo test -p modula-extract -p cargo-modula -- --include-ignored
 
+  # Mutation testing of the lines changed in a pull request. Scoped by
+  # .cargo/mutants.toml to the pure crates and tested per-package, so it stays
+  # fast. Fails if newly added or changed logic is not covered by a test.
+  mutants:
+    name: Mutants (PR diff)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Diff against the base branch
+        run: git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+      - name: Mutation-test changed lines
+        run: cargo mutants --in-diff pr.diff -j 4
+
   # Supply-chain checks: RUSTSEC advisories (cargo audit) and license/duplicate
   # policy (cargo deny). Neither builds the project, so this job is quick.
   security:
