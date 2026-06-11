@@ -26,16 +26,36 @@ jobs:
       - name: Test (ir + metrics)
         run: cargo test -p modula-ir -p modula-metrics
 
-  # Slow tier: the rust-analyzer extractor. Heavy build, needs a proc-macro
-  # server, so its integration tests are marked #[ignore] and run explicitly.
+  # Slow tier: the rust-analyzer extractor and the CLI. Heavy build, and the
+  # integration tests need the sysroot std source (rust-src) for std-generic
+  # resolution and the proc-macro server (rust-analyzer component) for derive and
+  # other macro expansion. Those tests are #[ignore] and run explicitly.
   slow:
-    name: Slow (extract)
+    name: Slow (extract + cli)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rust-src, rust-analyzer
       - uses: Swatinem/rust-cache@v2
-      - name: Build extractor and CLI
-        run: cargo build -p modula-extract -p cargo-modula
-      - name: Test (extract, including ignored integration tests)
-        run: cargo test -p modula-extract -- --include-ignored
+      - name: Clippy (extract + cli)
+        run: cargo clippy -p modula-extract -p cargo-modula --all-targets -- -D warnings
+      - name: Test (extract + cli, including ignored integration tests)
+        run: cargo test -p modula-extract -p cargo-modula -- --include-ignored
+
+  # Supply-chain checks: RUSTSEC advisories (cargo audit) and license/duplicate
+  # policy (cargo deny). Neither builds the project, so this job is quick.
+  security:
+    name: Security (audit + deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Audit (RUSTSEC advisories)
+        run: cargo audit
+      - name: Deny (licenses + bans)
+        run: cargo deny check licenses bans
