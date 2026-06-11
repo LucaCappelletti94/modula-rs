@@ -225,3 +225,184 @@ fn opt(value: Option<f64>) -> String {
 fn fmt_opt(value: Option<f64>) -> String {
     value.map_or_else(|| "n/a".to_owned(), |v| format!("{v:.3}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coupling::ModuleCoupling;
+    use crate::cycles::TangleReport;
+    use crate::encapsulation::{EncapsulationReport, Leak, OverExposure};
+    use crate::modularity::{DepthRecord, DivergenceRecord};
+    use crate::score::{CompositeScore, CompositeWeights};
+    use modula_ir::{ItemId, ModuleId, Visibility};
+
+    /// A minimal result with the gate-relevant fields set and everything else
+    /// empty, so gate and render branches can be driven deterministically.
+    fn bare(
+        headline: f64,
+        is_acyclic: bool,
+        sccs: usize,
+        over_exposed_fraction: f64,
+    ) -> AnalysisResult {
+        AnalysisResult {
+            crate_name: "demo".to_owned(),
+            n_items: 1,
+            n_modules: 1,
+            n_module_nodes: 1,
+            modularity_profile: Vec::new(),
+            divergence_profile: Vec::new(),
+            modules: Vec::new(),
+            tangles: TangleReport {
+                sccs: vec![vec![ModuleId(0)]; sccs],
+                circuits: Vec::new(),
+                is_acyclic,
+                largest_scc: usize::from(sccs != 0),
+                circuits_truncated: false,
+            },
+            encapsulation: EncapsulationReport {
+                over_exposed: Vec::new(),
+                over_exposed_fraction,
+                deepest_leaks: Vec::new(),
+                mean_leak_cost: 0.0,
+            },
+            composite: CompositeScore {
+                headline,
+                headline_depth_averaged: headline,
+                modularity_term: None,
+                divergence_term: 0.0,
+                acyclicity_term: 0.0,
+                encapsulation_term: 0.0,
+                weights: CompositeWeights::default(),
+            },
+        }
+    }
+
+    #[test]
+    fn all_gates_pass() {
+        let r = bare(0.8, true, 0, 0.1);
+        let gates = Gates {
+            min_headline: Some(0.5),
+            require_acyclic: true,
+            max_overexposed_fraction: Some(0.2),
+        };
+        let outcome = evaluate_gates(&r, &gates);
+        assert!(outcome.passed);
+        assert_eq!(outcome.results.len(), 3);
+        assert!(outcome.results.iter().all(|g| g.passed));
+    }
+
+    #[test]
+    fn each_gate_can_fail_independently() {
+        let r = bare(0.3, false, 2, 0.9);
+        let headline = evaluate_gates(
+            &r,
+            &Gates {
+                min_headline: Some(0.5),
+                ..Default::default()
+            },
+        );
+        assert!(!headline.passed && !headline.results[0].passed);
+
+        let acyclic = evaluate_gates(
+            &r,
+            &Gates {
+                require_acyclic: true,
+                ..Default::default()
+            },
+        );
+        assert!(!acyclic.passed);
+        assert!(acyclic.results[0].detail.contains("tangle"));
+
+        let exposed = evaluate_gates(
+            &r,
+            &Gates {
+                max_overexposed_fraction: Some(0.2),
+                ..Default::default()
+            },
+        );
+        assert!(!exposed.passed);
+    }
+
+    #[test]
+    fn no_gates_passes_vacuously() {
+        let outcome = evaluate_gates(&bare(0.0, false, 1, 1.0), &Gates::default());
+        assert!(outcome.passed);
+        assert!(outcome.results.is_empty());
+    }
+
+    #[test]
+    fn human_report_clean_graph_says_acyclic_and_none() {
+        let text = to_human(&bare(0.7, true, 0, 0.0));
+        assert!(text.contains("Modularity report for crate `demo`"));
+        assert!(text.contains("Cycles: none"));
+        assert!(text.contains("Over-exposed items: none"));
+        assert!(text.contains("Deepest leaks: none"));
+    }
+
+    #[test]
+    fn human_report_renders_cycles_leaks_and_profiles() {
+        let mut r = bare(0.4, false, 1, 0.5);
+        r.modules = vec![ModuleCoupling {
+            module: ModuleId(0),
+            path: "demo::a".to_owned(),
+            intra_weight: 1.0,
+            inter_weight_out: 2.0,
+            inter_weight_in: 0.0,
+            cohesion: Some(0.25),
+            ca: 1,
+            ce: 2,
+            instability: Some(0.66),
+        }];
+        r.tangles.sccs = vec![vec![ModuleId(0), ModuleId(1)]];
+        r.tangles.largest_scc = 2;
+        r.encapsulation.over_exposed = vec![OverExposure {
+            item: ItemId(0),
+            path: "demo::a::Thing".to_owned(),
+            declared: Visibility::Public,
+            required: Visibility::Crate,
+            reachable_pub_api: false,
+        }];
+        r.encapsulation.deepest_leaks = vec![Leak {
+            from: ItemId(0),
+            to: ItemId(1),
+            from_path: "demo::a".to_owned(),
+            to_path: "demo::b::Deep".to_owned(),
+            lin: 0.1,
+            leak_cost: 0.9,
+        }];
+        r.modularity_profile = vec![DepthRecord {
+            depth: 1,
+            communities_declared: 2,
+            q_declared_undirected: 0.1,
+            q_declared_directed: 0.2,
+            q_detected_undirected: 0.3,
+            q_detected_directed: 0.4,
+            efficiency_undirected: Some(0.5),
+            efficiency_directed: None,
+        }];
+        r.divergence_profile = vec![DivergenceRecord {
+            depth: 1,
+            vi: 1.0,
+            vi_normalized: 0.5,
+            nmi: 0.5,
+            ami: 0.4,
+            ari: 0.3,
+            h_declared_given_detected: 0.2,
+            h_detected_given_declared: 0.1,
+        }];
+        let text = to_human(&r);
+        assert!(text.contains("Leakiest modules"));
+        assert!(text.contains("demo::a"));
+        assert!(text.contains("tangle(s)"));
+        assert!(text.contains("Over-exposed items (1)"));
+        assert!(text.contains("Deepest leaks (cost)"));
+        // `efficiency_directed: None` exercises the `n/a` branch of `opt`.
+        assert!(text.contains("n/a"));
+    }
+
+    #[test]
+    fn json_serializes_with_headline() {
+        let json = to_json(&bare(0.5, true, 0, 0.0)).expect("serialize");
+        assert!(json.contains("\"headline\""));
+    }
+}
