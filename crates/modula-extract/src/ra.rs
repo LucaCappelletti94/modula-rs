@@ -493,9 +493,17 @@ impl<'db> Builder<'db> {
                 self.collect_use_tree(module, module_id, scope, edition, &subtree, &full);
             }
         } else if tree.star_token().is_some() {
-            // `pub use prefix::*`: re-export the public items of `prefix`.
+            // `pub use prefix::*`: re-export the public items of `prefix`. Use the
+            // target's fully resolved scope (not just its declarations) so the
+            // glob follows `prefix`'s own re-exports, including chains through
+            // further globs. Items the target only re-exports privately keep a
+            // non-public original visibility and are filtered out; untracked
+            // (external/std) items are dropped by the `item_ids` lookup.
             if let Some(target) = self.resolve_module_path(module, scope, edition, &full) {
-                for def in target.declarations(self.db) {
+                for (_name, scope_def) in target.scope(self.db, None) {
+                    let ScopeDef::ModuleDef(def) = scope_def else {
+                        continue;
+                    };
                     if matches!(def.visibility(self.db), hir::Visibility::Public) {
                         if let Some(&to) = self.item_ids.get(&def) {
                             self.reexports.push((module_id, to));

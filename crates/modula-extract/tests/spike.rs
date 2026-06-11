@@ -422,6 +422,26 @@ fn target_filtering_excludes_tests_and_marks_public_api() {
 
 #[test]
 #[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn glob_reexport_chain_marks_item_public_api() {
+    let graph = RaExtractor
+        .extract(&opts("globchain"))
+        .expect("extraction succeeds");
+
+    // `Chained` is reachable only through `pub use relay::*` -> `pub use
+    // inner::*`, so following the glob chain is required to mark it public API.
+    let chained = graph
+        .items
+        .iter()
+        .find(|i| i.canonical_path == "globchain::inner::Chained")
+        .expect("globchain::inner::Chained extracted");
+    assert!(
+        chained.reachable_pub_api,
+        "glob-through-glob chain should expose Chained as public API"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
 fn derive_macro_generates_impl_edge() {
     let graph = RaExtractor
         .extract(&opts("procderive"))
