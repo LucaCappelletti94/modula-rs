@@ -17,15 +17,15 @@ expression: normalized(&graph)
       "weight": 1
     },
     {
-      "from": "rich::logic::greet",
+      "from": "rich::logic::Outer::greet",
       "kind": "Body",
-      "to": "rich::logic::helper",
+      "to": "rich::logic::Outer::helper",
       "weight": 1
     },
     {
       "from": "rich::logic::run",
       "kind": "Body",
-      "to": "rich::logic::greet",
+      "to": "rich::logic::Outer::greet",
       "weight": 1
     },
     {
@@ -63,13 +63,13 @@ expression: normalized(&graph)
     {
       "kind": "Function",
       "owning_module": "rich::logic",
-      "path": "rich::logic::greet",
+      "path": "rich::logic::Outer::greet",
       "visibility": "Private"
     },
     {
       "kind": "Function",
       "owning_module": "rich::logic",
-      "path": "rich::logic::helper",
+      "path": "rich::logic::Outer::helper",
       "visibility": "Private"
     },
     {
@@ -91,6 +91,12 @@ expression: normalized(&graph)
       "visibility": "Public"
     },
     {
+      "kind": "Function",
+      "owning_module": "rich::types",
+      "path": "rich::types::Greet::greet",
+      "visibility": "Public"
+    },
+    {
       "kind": "Struct",
       "owning_module": "rich::types",
       "path": "rich::types::Inner",
@@ -100,12 +106,6 @@ expression: normalized(&graph)
       "kind": "Struct",
       "owning_module": "rich::types",
       "path": "rich::types::Outer",
-      "visibility": "Public"
-    },
-    {
-      "kind": "Function",
-      "owning_module": "rich::types",
-      "path": "rich::types::greet",
       "visibility": "Public"
     }
   ],

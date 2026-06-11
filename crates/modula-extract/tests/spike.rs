@@ -164,11 +164,11 @@ fn trait_items_impl_bounds_and_impl_trait_produce_edges() {
         .expect("extraction succeeds");
 
     // Trait method signature: `Store::describe(&self) -> Record` (associated
-    // items are module-qualified, so the path is `traits::describe`).
+    // items are type-qualified, so the path is `traits::Store::describe`).
     assert!(
         has_edge(
             &graph,
-            "traits::describe",
+            "traits::Store::describe",
             "traits::Record",
             RefKind::Signature
         ),
@@ -176,7 +176,12 @@ fn trait_items_impl_bounds_and_impl_trait_produce_edges() {
     );
     // Trait default method body: `helper` calls `describe`.
     assert!(
-        has_edge(&graph, "traits::helper", "traits::describe", RefKind::Body),
+        has_edge(
+            &graph,
+            "traits::Store::helper",
+            "traits::Store::describe",
+            RefKind::Body
+        ),
         "missing default-body edge helper -> describe"
     );
     // Impl generic bound: `impl<T: Marker> Pair<T>`.

@@ -247,7 +247,7 @@ impl<'db> Builder<'db> {
             if matches!(def, ModuleDef::Module(_)) {
                 continue;
             }
-            self.add_item(def, crate_id, id, module, edition);
+            self.add_item(def, crate_id, id, module, edition, None);
         }
 
         for child in module.children(self.db) {
@@ -266,13 +266,20 @@ impl<'db> Builder<'db> {
                 continue;
             };
 
+            // Associated items are qualified by the implementing type, so an
+            // inherent or trait impl method reads `module::SelfType::method`.
+            let self_name = imp
+                .self_ty(self.db)
+                .as_adt()
+                .map(|adt| adt.name(self.db).display(self.db, edition).to_string());
+
             for assoc in imp.items(self.db) {
                 let def = match assoc {
                     AssocItem::Function(f) => ModuleDef::Function(f),
                     AssocItem::Const(c) => ModuleDef::Const(c),
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
-                self.add_item(def, crate_id, owning, module, edition);
+                self.add_item(def, crate_id, owning, module, edition, self_name.as_deref());
             }
 
             // From the implementing type: an `Impl` edge to the implemented
@@ -319,13 +326,15 @@ impl<'db> Builder<'db> {
                 continue;
             };
             let edition = module.krate(self.db).edition(self.db);
+            // Trait items are qualified by the trait, e.g. `module::Trait::method`.
+            let trait_name = trait_.name(self.db).display(self.db, edition).to_string();
             for assoc in trait_.items(self.db) {
                 let def = match assoc {
                     AssocItem::Function(f) => ModuleDef::Function(f),
                     AssocItem::Const(c) => ModuleDef::Const(c),
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
-                self.add_item(def, crate_id, owning, module, edition);
+                self.add_item(def, crate_id, owning, module, edition, Some(&trait_name));
             }
         }
     }
@@ -337,6 +346,7 @@ impl<'db> Builder<'db> {
         owning_module: ModuleId,
         owning_hir_module: Module,
         edition: Edition,
+        qualifier: Option<&str>,
     ) {
         if self.item_ids.contains_key(&def) {
             return;
@@ -350,7 +360,14 @@ impl<'db> Builder<'db> {
 
         let crate_name = self.crates[crate_id.index()].name.clone();
         let (canonical_path, has_canonical_path) = match def.canonical_path(self.db, edition) {
-            Some(relative) => (format!("{crate_name}::{relative}"), true),
+            // Associated items are otherwise module-qualified (`m::method`), which
+            // collides when two types in a module have a same-named method. Insert
+            // the implementing type or trait so the path reads `m::Type::method`.
+            Some(relative) => {
+                let relative =
+                    qualifier.map_or(relative.clone(), |q| qualify_assoc_path(&relative, q));
+                (format!("{crate_name}::{relative}"), true)
+            }
             None => (
                 synthetic_path(self.db, def, owning_module, id, edition),
                 false,
@@ -931,6 +948,15 @@ fn select_targets(
 fn crate_root_path(db: &RootDatabase, vfs: &Vfs, krate: Crate) -> Option<String> {
     let file = krate.root_file(db);
     vfs.file_path(file).as_path().map(|p| p.as_str().to_owned())
+}
+
+/// Inserts an associated item's qualifier (the implementing type or trait)
+/// before its final path segment, turning `m::method` into `m::Type::method`.
+fn qualify_assoc_path(relative: &str, qualifier: &str) -> String {
+    match relative.rsplit_once("::") {
+        Some((prefix, last)) => format!("{prefix}::{qualifier}::{last}"),
+        None => format!("{qualifier}::{relative}"),
+    }
 }
 
 fn item_kind(def: ModuleDef) -> Option<ItemKind> {

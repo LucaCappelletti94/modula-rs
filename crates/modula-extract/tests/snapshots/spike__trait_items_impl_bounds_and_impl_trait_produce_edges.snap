@@ -11,39 +11,39 @@ expression: normalized(&graph)
       "weight": 1
     },
     {
+      "from": "traits::Pair::new",
+      "kind": "Signature",
+      "to": "traits::Pair",
+      "weight": 1
+    },
+    {
+      "from": "traits::Pair::new",
+      "kind": "Body",
+      "to": "traits::Pair",
+      "weight": 1
+    },
+    {
+      "from": "traits::Store::describe",
+      "kind": "Signature",
+      "to": "traits::Record",
+      "weight": 1
+    },
+    {
+      "from": "traits::Store::helper",
+      "kind": "Signature",
+      "to": "traits::Record",
+      "weight": 1
+    },
+    {
+      "from": "traits::Store::helper",
+      "kind": "Body",
+      "to": "traits::Store::describe",
+      "weight": 1
+    },
+    {
       "from": "traits::Token",
       "kind": "Impl",
       "to": "traits::Marker",
-      "weight": 1
-    },
-    {
-      "from": "traits::describe",
-      "kind": "Signature",
-      "to": "traits::Record",
-      "weight": 1
-    },
-    {
-      "from": "traits::helper",
-      "kind": "Signature",
-      "to": "traits::Record",
-      "weight": 1
-    },
-    {
-      "from": "traits::helper",
-      "kind": "Body",
-      "to": "traits::describe",
-      "weight": 1
-    },
-    {
-      "from": "traits::new",
-      "kind": "Signature",
-      "to": "traits::Pair",
-      "weight": 1
-    },
-    {
-      "from": "traits::new",
-      "kind": "Body",
-      "to": "traits::Pair",
       "weight": 1
     },
     {
@@ -79,6 +79,12 @@ expression: normalized(&graph)
       "visibility": "Public"
     },
     {
+      "kind": "Function",
+      "owning_module": "traits",
+      "path": "traits::Pair::new",
+      "visibility": "Public"
+    },
+    {
       "kind": "Struct",
       "owning_module": "traits",
       "path": "traits::Record",
@@ -91,27 +97,21 @@ expression: normalized(&graph)
       "visibility": "Public"
     },
     {
+      "kind": "Function",
+      "owning_module": "traits",
+      "path": "traits::Store::describe",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "traits",
+      "path": "traits::Store::helper",
+      "visibility": "Public"
+    },
+    {
       "kind": "Struct",
       "owning_module": "traits",
       "path": "traits::Token",
-      "visibility": "Public"
-    },
-    {
-      "kind": "Function",
-      "owning_module": "traits",
-      "path": "traits::describe",
-      "visibility": "Public"
-    },
-    {
-      "kind": "Function",
-      "owning_module": "traits",
-      "path": "traits::helper",
-      "visibility": "Public"
-    },
-    {
-      "kind": "Function",
-      "owning_module": "traits",
-      "path": "traits::new",
       "visibility": "Public"
     },
     {
