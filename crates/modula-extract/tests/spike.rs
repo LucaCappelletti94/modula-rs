@@ -38,13 +38,19 @@ fn normalized(graph: &CrateGraph) -> serde_json::Value {
         .map(|m| {
             serde_json::json!({
                 "path": m.canonical_path,
+                "kind": m.kind,
                 "depth": m.depth,
                 "visibility": m.visibility,
                 "parent": m.parent.map(|p| graph.module(p).canonical_path.clone()),
             })
         })
         .collect();
-    modules.sort_by_key(|v| v["path"].as_str().unwrap_or_default().to_owned());
+    modules.sort_by_key(|v| {
+        (
+            v["path"].as_str().unwrap_or_default().to_owned(),
+            v["kind"].as_str().unwrap_or_default().to_owned(),
+        )
+    });
 
     let mut items: Vec<_> = graph
         .items
@@ -206,6 +212,86 @@ fn trait_items_impl_bounds_and_impl_trait_produce_edges() {
     );
 
     insta::assert_json_snapshot!(normalized(&graph));
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn type_containers_partition_a_flat_crate() {
+    use modula_ir::ModuleKind;
+
+    let graph = RaExtractor
+        .extract(&opts("flat"))
+        .expect("extraction succeeds");
+
+    // A Type container exists for each struct, parented to the crate root at
+    // depth 1 (the crate has no `mod` declarations).
+    let container = |path: &str| {
+        graph
+            .modules
+            .iter()
+            .find(|m| m.canonical_path == path && m.kind == ModuleKind::Type)
+            .unwrap_or_else(|| panic!("Type container {path} missing"))
+    };
+    let engine = container("flat::Engine");
+    let car = container("flat::Car");
+    assert_eq!(graph.module(engine.parent.unwrap()).canonical_path, "flat");
+    assert_eq!(engine.depth, 1);
+
+    // The type and its methods are owned by the container.
+    let owned_by = |item_path: &str, module_id| {
+        let it = graph
+            .items
+            .iter()
+            .find(|i| i.canonical_path == item_path)
+            .unwrap_or_else(|| panic!("{item_path} missing"));
+        assert_eq!(
+            it.owning_module, module_id,
+            "{item_path} not in its container"
+        );
+    };
+    owned_by("flat::Engine", engine.id);
+    owned_by("flat::Engine::boost", engine.id);
+    owned_by("flat::Engine::new", engine.id);
+    owned_by("flat::Car", car.id);
+    owned_by("flat::Car::drive", car.id);
+
+    // The cross-type body edge survives reparenting.
+    assert!(
+        has_edge(
+            &graph,
+            "flat::Car::drive",
+            "flat::Engine::boost",
+            RefKind::Body
+        ),
+        "missing cross-type edge drive -> boost"
+    );
+}
+
+#[test]
+#[ignore = "loads a cargo workspace via rust-analyzer; run with --include-ignored"]
+fn non_local_self_impl_creates_no_container() {
+    use modula_ir::ModuleKind;
+
+    let graph = RaExtractor
+        .extract(&opts("nonlocal"))
+        .expect("extraction succeeds");
+
+    // The trait itself gets a container...
+    assert!(
+        graph
+            .modules
+            .iter()
+            .any(|m| m.kind == ModuleKind::Type && m.canonical_path == "nonlocal::Doubler"),
+        "trait Doubler should get a type container"
+    );
+    // ...but the foreign primitive `u32` does not.
+    assert!(
+        !graph
+            .modules
+            .iter()
+            .any(|m| m.kind == ModuleKind::Type && m.name == "u32"),
+        "no container for a non-local self type"
+    );
 }
 
 #[test]
@@ -629,6 +715,18 @@ fn rich_captures_signature_impl_and_method_edges() {
     assert!(
         has_edge_to_containing(&graph, "greet", "helper", RefKind::Body),
         "missing greet -> helper body edge"
+    );
+
+    // The Outer type container is parented to the DECLARATION module
+    // (`rich::types`), even though its impls live in `rich::logic`.
+    let outer = graph
+        .modules
+        .iter()
+        .find(|m| m.kind == modula_ir::ModuleKind::Type && m.canonical_path == "rich::types::Outer")
+        .expect("Outer type container");
+    assert_eq!(
+        graph.module(outer.parent.unwrap()).canonical_path,
+        "rich::types"
     );
 
     insta::assert_json_snapshot!(normalized(&graph));

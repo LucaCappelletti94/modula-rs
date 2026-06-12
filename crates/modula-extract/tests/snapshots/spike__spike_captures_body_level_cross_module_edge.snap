@@ -58,18 +58,21 @@ expression: normalized(&graph)
   "modules": [
     {
       "depth": 0,
+      "kind": "Mod",
       "parent": null,
       "path": "spike",
       "visibility": "Public"
     },
     {
       "depth": 1,
+      "kind": "Mod",
       "parent": "spike",
       "path": "spike::a",
       "visibility": "Public"
     },
     {
       "depth": 1,
+      "kind": "Mod",
       "parent": "spike",
       "path": "spike::b",
       "visibility": "Public"

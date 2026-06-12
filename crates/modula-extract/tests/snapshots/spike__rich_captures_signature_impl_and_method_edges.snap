@@ -62,13 +62,13 @@ expression: normalized(&graph)
     },
     {
       "kind": "Function",
-      "owning_module": "rich::logic",
+      "owning_module": "rich::types::Outer",
       "path": "rich::logic::Outer::greet",
       "visibility": "Private"
     },
     {
       "kind": "Function",
-      "owning_module": "rich::logic",
+      "owning_module": "rich::types::Outer",
       "path": "rich::logic::Outer::helper",
       "visibility": "Private"
     },
@@ -86,25 +86,25 @@ expression: normalized(&graph)
     },
     {
       "kind": "Trait",
-      "owning_module": "rich::types",
+      "owning_module": "rich::types::Greet",
       "path": "rich::types::Greet",
       "visibility": "Public"
     },
     {
       "kind": "Function",
-      "owning_module": "rich::types",
+      "owning_module": "rich::types::Greet",
       "path": "rich::types::Greet::greet",
       "visibility": "Public"
     },
     {
       "kind": "Struct",
-      "owning_module": "rich::types",
+      "owning_module": "rich::types::Inner",
       "path": "rich::types::Inner",
       "visibility": "Public"
     },
     {
       "kind": "Struct",
-      "owning_module": "rich::types",
+      "owning_module": "rich::types::Outer",
       "path": "rich::types::Outer",
       "visibility": "Public"
     }
@@ -112,20 +112,44 @@ expression: normalized(&graph)
   "modules": [
     {
       "depth": 0,
+      "kind": "Mod",
       "parent": null,
       "path": "rich",
       "visibility": "Public"
     },
     {
       "depth": 1,
+      "kind": "Mod",
       "parent": "rich",
       "path": "rich::logic",
       "visibility": "Public"
     },
     {
       "depth": 1,
+      "kind": "Mod",
       "parent": "rich",
       "path": "rich::types",
+      "visibility": "Public"
+    },
+    {
+      "depth": 2,
+      "kind": "Type",
+      "parent": "rich::types",
+      "path": "rich::types::Greet",
+      "visibility": "Public"
+    },
+    {
+      "depth": 2,
+      "kind": "Type",
+      "parent": "rich::types",
+      "path": "rich::types::Inner",
+      "visibility": "Public"
+    },
+    {
+      "depth": 2,
+      "kind": "Type",
+      "parent": "rich::types",
+      "path": "rich::types::Outer",
       "visibility": "Public"
     }
   ]

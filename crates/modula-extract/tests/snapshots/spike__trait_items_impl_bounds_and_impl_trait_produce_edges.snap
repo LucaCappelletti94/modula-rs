@@ -68,49 +68,49 @@ expression: normalized(&graph)
     },
     {
       "kind": "Trait",
-      "owning_module": "traits",
+      "owning_module": "traits::Marker",
       "path": "traits::Marker",
       "visibility": "Public"
     },
     {
       "kind": "Struct",
-      "owning_module": "traits",
+      "owning_module": "traits::Pair",
       "path": "traits::Pair",
       "visibility": "Public"
     },
     {
       "kind": "Function",
-      "owning_module": "traits",
+      "owning_module": "traits::Pair",
       "path": "traits::Pair::new",
       "visibility": "Public"
     },
     {
       "kind": "Struct",
-      "owning_module": "traits",
+      "owning_module": "traits::Record",
       "path": "traits::Record",
       "visibility": "Public"
     },
     {
       "kind": "Trait",
-      "owning_module": "traits",
+      "owning_module": "traits::Store",
       "path": "traits::Store",
       "visibility": "Public"
     },
     {
       "kind": "Function",
-      "owning_module": "traits",
+      "owning_module": "traits::Store",
       "path": "traits::Store::describe",
       "visibility": "Public"
     },
     {
       "kind": "Function",
-      "owning_module": "traits",
+      "owning_module": "traits::Store",
       "path": "traits::Store::helper",
       "visibility": "Public"
     },
     {
       "kind": "Struct",
-      "owning_module": "traits",
+      "owning_module": "traits::Token",
       "path": "traits::Token",
       "visibility": "Public"
     },
@@ -124,8 +124,44 @@ expression: normalized(&graph)
   "modules": [
     {
       "depth": 0,
+      "kind": "Mod",
       "parent": null,
       "path": "traits",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "kind": "Type",
+      "parent": "traits",
+      "path": "traits::Marker",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "kind": "Type",
+      "parent": "traits",
+      "path": "traits::Pair",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "kind": "Type",
+      "parent": "traits",
+      "path": "traits::Record",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "kind": "Type",
+      "parent": "traits",
+      "path": "traits::Store",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "kind": "Type",
+      "parent": "traits",
+      "path": "traits::Token",
       "visibility": "Public"
     }
   ]

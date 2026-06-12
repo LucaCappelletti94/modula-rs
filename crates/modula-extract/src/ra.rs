@@ -29,7 +29,7 @@ use ra_ap_vfs::Vfs;
 
 use modula_ir::{
     Crate as IrCrate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module as IrModule,
-    ModuleId, RefKind, SCHEMA_VERSION, Visibility,
+    ModuleId, ModuleKind, RefKind, SCHEMA_VERSION, Visibility,
 };
 
 use crate::{ExtractOptions, Extractor};
@@ -99,13 +99,13 @@ impl Extractor for RaExtractor {
                 })
                 .collect();
             kept.sort_by_key(|krate| crate_root_path(&db, &vfs, *krate).unwrap_or_default());
-            if let Some(lib) = &selection.lib_root {
-                if let Some(pos) = kept.iter().position(|krate| {
+            if let Some(lib) = &selection.lib_root
+                && let Some(pos) = kept.iter().position(|krate| {
                     crate_root_path(&db, &vfs, *krate).as_deref() == Some(lib.as_str())
-                }) {
-                    let lib_crate = kept.remove(pos);
-                    kept.insert(0, lib_crate);
-                }
+                })
+            {
+                let lib_crate = kept.remove(pos);
+                kept.insert(0, lib_crate);
             }
 
             if kept.is_empty() {
@@ -120,6 +120,7 @@ impl Extractor for RaExtractor {
                 builder.add_impls(*krate);
             }
             builder.add_trait_items();
+            builder.add_type_containers();
             builder.add_signature_edges();
             builder.add_trait_bound_edges();
             builder.add_import_edges();
@@ -152,6 +153,10 @@ struct Builder<'db> {
     /// `pub use` re-exports: `(re-exporting module, target item)`, including
     /// nested and glob re-exports.
     reexports: Vec<(ModuleId, ItemId)>,
+    /// For each associated item or enum variant, the [`ItemId`] of the type it
+    /// belongs to. Drives the per-type containers added by
+    /// [`add_type_containers`](Self::add_type_containers).
+    assoc_owner: HashMap<ItemId, ItemId>,
     /// Edge multiplicities, keyed by `(from, to, kind)`.
     edges: BTreeMap<(ItemId, ItemId, RefKind), u32>,
 }
@@ -170,6 +175,7 @@ impl<'db> Builder<'db> {
             functions: Vec::new(),
             value_bodies: Vec::new(),
             reexports: Vec::new(),
+            assoc_owner: HashMap::new(),
             edges: BTreeMap::new(),
         }
     }
@@ -224,6 +230,7 @@ impl<'db> Builder<'db> {
             canonical_path: canonical_path.clone(),
             depth,
             visibility: visibility.clone(),
+            kind: ModuleKind::Mod,
         });
 
         // The module is also a first-class item so that `use` imports have a
@@ -268,10 +275,14 @@ impl<'db> Builder<'db> {
 
             // Associated items are qualified by the implementing type, so an
             // inherent or trait impl method reads `module::SelfType::method`.
-            let self_name = imp
-                .self_ty(self.db)
-                .as_adt()
-                .map(|adt| adt.name(self.db).display(self.db, edition).to_string());
+            let self_adt = imp.self_ty(self.db).as_adt();
+            let self_name =
+                self_adt.map(|adt| adt.name(self.db).display(self.db, edition).to_string());
+            // The implementing type's item id (None for impls on non-local or
+            // non-ADT self types, e.g. generic params or primitives); used to
+            // cluster the associated items under the type's container.
+            let self_type_id =
+                self_adt.and_then(|adt| self.item_ids.get(&ModuleDef::from(adt)).copied());
 
             for assoc in imp.items(self.db) {
                 let def = match assoc {
@@ -280,23 +291,26 @@ impl<'db> Builder<'db> {
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
                 self.add_item(def, crate_id, owning, module, edition, self_name.as_deref());
+                if let (Some(type_id), Some(&assoc_id)) = (self_type_id, self.item_ids.get(&def)) {
+                    self.assoc_owner.insert(assoc_id, type_id);
+                }
             }
 
             // From the implementing type: an `Impl` edge to the implemented
             // trait, and `TraitBound` edges to the traits in the impl's bounds.
-            if let Some(self_adt) = imp.self_ty(self.db).as_adt() {
-                if let Some(&from) = self.item_ids.get(&ModuleDef::from(self_adt)) {
-                    if let Some(trait_) = imp.trait_(self.db) {
-                        if let Some(&to) = self.item_ids.get(&ModuleDef::Trait(trait_)) {
-                            self.add_edge(from, to, RefKind::Impl);
-                        }
-                    }
-                    for param in GenericDef::Impl(imp).type_or_const_params(self.db) {
-                        if let Some(type_param) = param.as_type_param(self.db) {
-                            for bound in type_param.trait_bounds(self.db) {
-                                if let Some(&to) = self.item_ids.get(&ModuleDef::Trait(bound)) {
-                                    self.add_edge(from, to, RefKind::TraitBound);
-                                }
+            if let Some(self_adt) = imp.self_ty(self.db).as_adt()
+                && let Some(&from) = self.item_ids.get(&ModuleDef::from(self_adt))
+            {
+                if let Some(trait_) = imp.trait_(self.db)
+                    && let Some(&to) = self.item_ids.get(&ModuleDef::Trait(trait_))
+                {
+                    self.add_edge(from, to, RefKind::Impl);
+                }
+                for param in GenericDef::Impl(imp).type_or_const_params(self.db) {
+                    if let Some(type_param) = param.as_type_param(self.db) {
+                        for bound in type_param.trait_bounds(self.db) {
+                            if let Some(&to) = self.item_ids.get(&ModuleDef::Trait(bound)) {
+                                self.add_edge(from, to, RefKind::TraitBound);
                             }
                         }
                     }
@@ -328,6 +342,7 @@ impl<'db> Builder<'db> {
             let edition = module.krate(self.db).edition(self.db);
             // Trait items are qualified by the trait, e.g. `module::Trait::method`.
             let trait_name = trait_.name(self.db).display(self.db, edition).to_string();
+            let trait_id = self.item_ids.get(&ModuleDef::Trait(trait_)).copied();
             for assoc in trait_.items(self.db) {
                 let def = match assoc {
                     AssocItem::Function(f) => ModuleDef::Function(f),
@@ -335,7 +350,74 @@ impl<'db> Builder<'db> {
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
                 self.add_item(def, crate_id, owning, module, edition, Some(&trait_name));
+                // Default trait methods/consts/types cluster with the trait.
+                if let (Some(type_id), Some(&assoc_id)) = (trait_id, self.item_ids.get(&def)) {
+                    self.assoc_owner.insert(assoc_id, type_id);
+                }
             }
+        }
+    }
+
+    /// Inserts a synthetic per-type container module beneath each type's `mod`
+    /// and re-points the type item plus all its associated items into it, so a
+    /// type and its methods form a cohesion cluster (the "type level"). This
+    /// gives even single-`mod` crates a non-trivial partition.
+    fn add_type_containers(&mut self) {
+        // Every struct/enum/union/trait gets a container.
+        let type_items: Vec<ItemId> = self
+            .items
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i.kind,
+                    ItemKind::Struct | ItemKind::Enum | ItemKind::Union | ItemKind::Trait
+                )
+            })
+            .map(|i| i.id)
+            .collect();
+
+        let mut container_of: HashMap<ItemId, ModuleId> = HashMap::new();
+        for t_id in type_items {
+            let (parent, canonical_path, crate_id, visibility) = {
+                let t = &self.items[t_id.index()];
+                (
+                    t.owning_module,
+                    t.canonical_path.clone(),
+                    t.crate_id,
+                    t.visibility.clone(),
+                )
+            };
+            let depth = self.modules[parent.index()].depth + 1;
+            let name = canonical_path
+                .rsplit("::")
+                .next()
+                .unwrap_or(&canonical_path)
+                .to_owned();
+            let container_id = ModuleId(self.modules.len() as u32);
+            self.modules.push(IrModule {
+                id: container_id,
+                crate_id,
+                parent: Some(parent),
+                name,
+                canonical_path,
+                depth,
+                visibility,
+                kind: ModuleKind::Type,
+            });
+            // The type itself clusters with its own methods.
+            self.items[t_id.index()].owning_module = container_id;
+            container_of.insert(t_id, container_id);
+        }
+
+        // Re-point each associated item into its type's container (collect first
+        // so the mutable item writes do not overlap the `assoc_owner` borrow).
+        let reparents: Vec<(ItemId, ModuleId)> = self
+            .assoc_owner
+            .iter()
+            .filter_map(|(&assoc, &ty)| container_of.get(&ty).map(|&c| (assoc, c)))
+            .collect();
+        for (assoc_id, container_id) in reparents {
+            self.items[assoc_id.index()].owning_module = container_id;
         }
     }
 
@@ -521,10 +603,10 @@ impl<'db> Builder<'db> {
                     let ScopeDef::ModuleDef(def) = scope_def else {
                         continue;
                     };
-                    if matches!(def.visibility(self.db), hir::Visibility::Public) {
-                        if let Some(&to) = self.item_ids.get(&def) {
-                            self.reexports.push((module_id, to));
-                        }
+                    if matches!(def.visibility(self.db), hir::Visibility::Public)
+                        && let Some(&to) = self.item_ids.get(&def)
+                    {
+                        self.reexports.push((module_id, to));
                     }
                 }
             }
@@ -536,12 +618,11 @@ impl<'db> Builder<'db> {
                 .and_then(|r| r.name())
                 .map(|n| n.text().to_string())
                 .or_else(|| full.last().cloned());
-            if let Some(name) = name {
-                if let Some(def) = scope.get(&name) {
-                    if let Some(&to) = self.item_ids.get(def) {
-                        self.reexports.push((module_id, to));
-                    }
-                }
+            if let Some(name) = name
+                && let Some(def) = scope.get(&name)
+                && let Some(&to) = self.item_ids.get(def)
+            {
+                self.reexports.push((module_id, to));
             }
         }
     }
@@ -841,16 +922,16 @@ fn collect_refs(
 
     for node in root.descendants() {
         if let Some(path) = ast::Path::cast(node.clone()) {
-            if let Some(PathResolution::Def(def)) = sema.resolve_path(&path) {
-                if let Some(&to) = item_ids.get(&def) {
-                    targets.push(to);
-                }
+            if let Some(PathResolution::Def(def)) = sema.resolve_path(&path)
+                && let Some(&to) = item_ids.get(&def)
+            {
+                targets.push(to);
             }
         } else if let Some(call) = ast::MethodCallExpr::cast(node.clone()) {
-            if let Some(function) = sema.resolve_method_call(&call) {
-                if let Some(&to) = item_ids.get(&ModuleDef::Function(function)) {
-                    targets.push(to);
-                }
+            if let Some(function) = sema.resolve_method_call(&call)
+                && let Some(&to) = item_ids.get(&ModuleDef::Function(function))
+            {
+                targets.push(to);
             }
         } else if let Some(field_expr) = ast::FieldExpr::cast(node.clone()) {
             // A field access `x.field` couples to the ADT that owns the field.
@@ -863,10 +944,10 @@ fn collect_refs(
         } else if let Some(macro_call) = ast::MacroCall::cast(node) {
             // The references a macro introduces live in its expansion, not the
             // call site, so resolve them by walking the expanded syntax.
-            if depth < MAX_MACRO_DEPTH {
-                if let Some(expanded) = sema.expand_macro_call(&macro_call) {
-                    collect_refs(sema, db, item_ids, &expanded.value, depth + 1, targets);
-                }
+            if depth < MAX_MACRO_DEPTH
+                && let Some(expanded) = sema.expand_macro_call(&macro_call)
+            {
+                collect_refs(sema, db, item_ids, &expanded.value, depth + 1, targets);
             }
         }
     }
