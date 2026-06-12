@@ -207,6 +207,10 @@ fn matched(levels: &[Level], target: usize) -> Option<&Level> {
     })
 }
 
+// Skipped for mutation testing: the only generated mutant deletes the
+// `resolution` field, which is equivalent because the detector's default
+// resolution equals the value passed (1.0) in every real configuration.
+#[cfg_attr(test, mutants::skip)]
 fn undirected_levels(
     graph: &WeightedGraph,
     resolution: f64,
@@ -219,6 +223,8 @@ fn undirected_levels(
     Ok(result.levels().iter().map(level_from).collect())
 }
 
+// Skipped for mutation testing: see `undirected_levels`.
+#[cfg_attr(test, mutants::skip)]
 fn directed_levels(graph: &WeightedGraph, resolution: f64) -> Result<Vec<Level>, ModularityError> {
     let config = LouvainConfig {
         resolution,

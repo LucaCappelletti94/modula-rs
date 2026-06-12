@@ -19,3 +19,6 @@ thiserror.workspace = true
 insta.workspace = true
 proptest.workspace = true
 approx.workspace = true
+# Provides the `#[mutants::skip]` attribute for cargo-mutants (used only under
+# cfg(test); not a runtime dependency).
+mutants = "0.0.3"
