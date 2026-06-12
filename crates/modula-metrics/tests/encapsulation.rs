@@ -2,8 +2,8 @@
 //! cheaper leak) and over-exposure detection. No rust-analyzer (fast tier).
 
 use modula_ir::{
-    Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, RefKind,
-    SCHEMA_VERSION, Visibility,
+    Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+    RefKind, SCHEMA_VERSION, Visibility,
 };
 use modula_metrics::encapsulation::encapsulation;
 
@@ -26,6 +26,7 @@ fn build(modules: &[ModuleSpec], items: &[ItemSpec], edges: &[(usize, usize)]) -
             canonical_path: path.to_owned(),
             depth,
             visibility: Visibility::Public,
+            kind: ModuleKind::Mod,
         })
         .collect();
     let items = items

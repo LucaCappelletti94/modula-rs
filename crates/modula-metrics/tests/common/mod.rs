@@ -1,8 +1,8 @@
 //! Shared hand-built IR fixtures for the metric tests (no rust-analyzer).
 
 use modula_ir::{
-    Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, RefKind,
-    SCHEMA_VERSION, Visibility,
+    Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+    RefKind, SCHEMA_VERSION, Visibility,
 };
 
 /// Builds a crate graph with `n` items split across two depth-1 modules `a` and
@@ -20,6 +20,7 @@ pub fn two_module_graph(n: usize, module_of: &[usize], edges: &[(usize, usize)])
             canonical_path: "k".to_owned(),
             depth: 0,
             visibility: Visibility::Public,
+            kind: ModuleKind::Mod,
         },
         Module {
             id: ModuleId(1),
@@ -29,6 +30,7 @@ pub fn two_module_graph(n: usize, module_of: &[usize], edges: &[(usize, usize)])
             canonical_path: "k::a".to_owned(),
             depth: 1,
             visibility: Visibility::Public,
+            kind: ModuleKind::Mod,
         },
         Module {
             id: ModuleId(2),
@@ -38,6 +40,7 @@ pub fn two_module_graph(n: usize, module_of: &[usize], edges: &[(usize, usize)])
             canonical_path: "k::b".to_owned(),
             depth: 1,
             visibility: Visibility::Public,
+            kind: ModuleKind::Mod,
         },
     ];
     let items = (0..n)

@@ -24,7 +24,7 @@ pub use edge::{Edge, RefKind};
 pub use ids::{CrateId, ItemId, ModuleId};
 pub use item::{Item, ItemKind};
 pub use krate::Crate;
-pub use module::Module;
+pub use module::{Module, ModuleKind};
 pub use visibility::Visibility;
 
 use std::collections::{HashMap, HashSet};
@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 /// The IR schema version. Bumped when the shape of [`CrateGraph`] changes so
 /// that stale caches and snapshots self-invalidate.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The complete extracted representation of a workspace.
 ///
@@ -85,6 +85,23 @@ impl CrateGraph {
     #[must_use]
     pub fn max_depth(&self) -> u32 {
         self.modules.iter().map(|m| m.depth).max().unwrap_or(0)
+    }
+
+    /// The nearest real `mod` ancestor of `module` (itself if it is already a
+    /// `mod`), climbing past synthetic per-type containers.
+    ///
+    /// Used by the metric layer when it must aggregate at the module level
+    /// rather than the finer type level (coupling, cycles).
+    #[must_use]
+    pub fn real_module(&self, module: ModuleId) -> ModuleId {
+        let mut current = module;
+        while self.module(current).kind == ModuleKind::Type {
+            match self.module(current).parent {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        current
     }
 
     /// The ancestor of `module` at the given `depth`, climbing parent links.
@@ -170,11 +187,21 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        Crate, CrateGraph, CrateId, Item, ItemId, ItemKind, Module, ModuleId, SCHEMA_VERSION,
-        Visibility,
+        Crate, CrateGraph, CrateId, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+        SCHEMA_VERSION, Visibility,
     };
 
     fn module(id: u32, parent: Option<u32>, depth: u32, visibility: Visibility) -> Module {
+        scope(id, parent, depth, visibility, ModuleKind::Mod)
+    }
+
+    fn scope(
+        id: u32,
+        parent: Option<u32>,
+        depth: u32,
+        visibility: Visibility,
+        kind: ModuleKind,
+    ) -> Module {
         Module {
             id: ModuleId(id),
             crate_id: CrateId(0),
@@ -183,6 +210,7 @@ mod tests {
             canonical_path: format!("c::m{id}"),
             depth,
             visibility,
+            kind,
         }
     }
 
@@ -307,5 +335,59 @@ mod tests {
             g.item(ItemId(1)).reachable_pub_api,
             "re-exported item is public even from a private module"
         );
+    }
+
+    /// Tree with a type container: root(0) <- mod a(1) <- type Foo(2, kind=Type).
+    /// Items: 0 = Foo (in container 2), 1 = Foo::method (in container 2),
+    /// 2 = a free fn (in mod a, id 1).
+    fn typed() -> CrateGraph {
+        CrateGraph {
+            schema_version: SCHEMA_VERSION,
+            ra_version: String::new(),
+            root_crate: CrateId(0),
+            crates: vec![Crate {
+                id: CrateId(0),
+                name: "c".to_owned(),
+                is_local: true,
+                root_module: ModuleId(0),
+            }],
+            modules: vec![
+                module(0, None, 0, Visibility::Public),
+                module(1, Some(0), 1, Visibility::Public),
+                scope(2, Some(1), 2, Visibility::Public, ModuleKind::Type),
+            ],
+            items: vec![
+                item(0, 2, Visibility::Public),
+                item(1, 2, Visibility::Public),
+                item(2, 1, Visibility::Public),
+            ],
+            edges: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn real_module_climbs_type_containers() {
+        let g = typed();
+        // The container (id 2) rolls up to its real mod (id 1).
+        assert_eq!(g.real_module(ModuleId(2)), ModuleId(1));
+        // A real mod returns itself.
+        assert_eq!(g.real_module(ModuleId(1)), ModuleId(1));
+        assert_eq!(g.real_module(ModuleId(0)), ModuleId(0));
+    }
+
+    #[test]
+    fn type_container_adds_a_partition_depth() {
+        let g = typed();
+        // The container deepens the tree.
+        assert_eq!(g.max_depth(), 2);
+        // At the type depth, Foo + its method (container 2) form one community,
+        // distinct from the free fn (mod a). A flat one-mod crate thus gains a
+        // non-trivial partition it would otherwise lack.
+        let p2 = g.partition_at_depth(2);
+        assert_eq!(p2[0], p2[1], "Foo and its method share the type container");
+        assert_ne!(p2[0], p2[2], "the free fn is a separate community");
+        // At the mod depth, everything collapses into mod a.
+        let p1 = g.partition_at_depth(1);
+        assert!(p1.iter().all(|&c| c == p1[0]), "all roll up to mod a");
     }
 }

@@ -29,8 +29,11 @@ impl ModuleAggregation {
     pub fn build(ir: &CrateGraph, weights: &RefKindWeights) -> Self {
         let mut index_of: HashMap<ModuleId, usize> = HashMap::new();
         let mut nodes: Vec<ModuleId> = Vec::new();
+        // Aggregate at the real-module level: a type container's items roll up to
+        // the `mod` that declares the type, so coupling and cycles stay
+        // module-level rather than dropping to the finer type level.
         for item in &ir.items {
-            let module = item.owning_module;
+            let module = ir.real_module(item.owning_module);
             index_of.entry(module).or_insert_with(|| {
                 let index = nodes.len();
                 nodes.push(module);
@@ -45,8 +48,8 @@ impl ModuleAggregation {
             if w <= 0.0 {
                 continue;
             }
-            let src = index_of[&ir.item(edge.from).owning_module];
-            let dst = index_of[&ir.item(edge.to).owning_module];
+            let src = index_of[&ir.real_module(ir.item(edge.from).owning_module)];
+            let dst = index_of[&ir.real_module(ir.item(edge.to).owning_module)];
             if src == dst {
                 intra[src] += w;
             } else {
@@ -79,9 +82,71 @@ impl ModuleAggregation {
 mod tests {
     use std::collections::{BTreeMap, HashMap};
 
-    use modula_ir::ModuleId;
+    use modula_ir::{
+        Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+        RefKind, SCHEMA_VERSION, Visibility,
+    };
 
     use super::ModuleAggregation;
+    use crate::weighting::RefKindWeights;
+
+    #[test]
+    fn type_containers_roll_up_to_their_real_module() {
+        // mod a(0) owns two type containers Foo(1) and Bar(2). An edge between an
+        // item in Foo and an item in Bar must aggregate as INTRA mod a (not as
+        // two separate type nodes).
+        let m = |id: u32, parent: Option<u32>, depth: u32, kind: ModuleKind| Module {
+            id: ModuleId(id),
+            crate_id: CrateId(0),
+            parent: parent.map(ModuleId),
+            name: format!("m{id}"),
+            canonical_path: format!("c::m{id}"),
+            depth,
+            visibility: Visibility::Public,
+            kind,
+        };
+        let it = |id: u32, owning: u32| Item {
+            id: ItemId(id),
+            canonical_path: format!("c::i{id}"),
+            kind: ItemKind::Function,
+            visibility: Visibility::Public,
+            owning_module: ModuleId(owning),
+            crate_id: CrateId(0),
+            has_canonical_path: true,
+            reachable_pub_api: false,
+        };
+        let ir = CrateGraph {
+            schema_version: SCHEMA_VERSION,
+            ra_version: String::new(),
+            root_crate: CrateId(0),
+            crates: vec![Crate {
+                id: CrateId(0),
+                name: "c".to_owned(),
+                is_local: true,
+                root_module: ModuleId(0),
+            }],
+            modules: vec![
+                m(0, None, 0, ModuleKind::Mod),
+                m(1, Some(0), 1, ModuleKind::Type),
+                m(2, Some(0), 1, ModuleKind::Type),
+            ],
+            items: vec![it(0, 1), it(1, 2)],
+            edges: vec![Edge {
+                from: ItemId(0),
+                to: ItemId(1),
+                kind: RefKind::Body,
+                weight: 1,
+            }],
+        };
+        let agg = ModuleAggregation::build(&ir, &RefKindWeights::default());
+        assert_eq!(agg.len(), 1, "both type containers roll up to mod a");
+        assert_eq!(agg.nodes, vec![ModuleId(0)]);
+        assert!(
+            agg.inter.is_empty(),
+            "the cross-type edge is intra-module a"
+        );
+        assert!(agg.intra[0] > 0.0);
+    }
 
     #[test]
     fn is_empty_reflects_node_count() {

@@ -1,8 +1,8 @@
 //! Round-trip and accessor tests for the IR, exercised without rust-analyzer.
 
 use modula_ir::{
-    Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, RefKind,
-    SCHEMA_VERSION, Visibility,
+    Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+    RefKind, SCHEMA_VERSION, Visibility,
 };
 
 /// Builds a tiny two-module crate graph by hand:
@@ -35,6 +35,7 @@ fn sample() -> CrateGraph {
                 canonical_path: "my_crate".to_owned(),
                 depth: 0,
                 visibility: Visibility::Public,
+                kind: ModuleKind::Mod,
             },
             Module {
                 id: ModuleId(1),
@@ -44,6 +45,7 @@ fn sample() -> CrateGraph {
                 canonical_path: "my_crate::a".to_owned(),
                 depth: 1,
                 visibility: Visibility::Crate,
+                kind: ModuleKind::Mod,
             },
             Module {
                 id: ModuleId(2),
@@ -53,6 +55,7 @@ fn sample() -> CrateGraph {
                 canonical_path: "my_crate::b".to_owned(),
                 depth: 1,
                 visibility: Visibility::Crate,
+                kind: ModuleKind::Mod,
             },
         ],
         items: vec![
@@ -135,6 +138,7 @@ fn public_api_requires_a_pub_chain_to_the_root() {
         canonical_path: path.to_owned(),
         depth: u32::from(parent.is_some()),
         visibility: vis,
+        kind: ModuleKind::Mod,
     };
     let item = |id: u32, path: &str, owner: u32, vis: Visibility| Item {
         id: ItemId(id),

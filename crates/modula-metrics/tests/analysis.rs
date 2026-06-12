@@ -4,7 +4,9 @@
 mod common;
 
 use common::{two_cliques_edges, two_module_graph};
-use modula_ir::{Crate, CrateGraph, CrateId, Module, ModuleId, SCHEMA_VERSION, Visibility};
+use modula_ir::{
+    Crate, CrateGraph, CrateId, Module, ModuleId, ModuleKind, SCHEMA_VERSION, Visibility,
+};
 use modula_metrics::analysis::{AnalysisConfig, analyze};
 use modula_metrics::report::{Gates, evaluate_gates, to_human, to_json};
 
@@ -36,6 +38,7 @@ fn empty_crate() -> CrateGraph {
             canonical_path: "empty".to_owned(),
             depth: 0,
             visibility: Visibility::Public,
+            kind: ModuleKind::Mod,
         }],
         items: Vec::new(),
         edges: Vec::new(),
@@ -66,6 +69,76 @@ fn cyclic_module_graph_lowers_acyclicity() {
 }
 
 #[test]
+fn type_level_gives_a_flat_crate_a_partition() {
+    use modula_ir::{Edge, Item, ItemId, ItemKind, RefKind};
+    // A single `mod` (the crate root) with two type containers Foo and Bar, each
+    // owning a struct + a method. Without the type level this would be one
+    // community (vacuous high score); with it, the type depth has two.
+    let krate = CrateId(0);
+    let m = |id: u32, parent: Option<u32>, depth: u32, kind: ModuleKind| Module {
+        id: ModuleId(id),
+        crate_id: krate,
+        parent: parent.map(ModuleId),
+        name: format!("m{id}"),
+        canonical_path: format!("k::m{id}"),
+        depth,
+        visibility: Visibility::Public,
+        kind,
+    };
+    let it = |id: u32, owner: u32, kind: ItemKind| Item {
+        id: ItemId(id),
+        canonical_path: format!("k::i{id}"),
+        kind,
+        visibility: Visibility::Public,
+        owning_module: ModuleId(owner),
+        crate_id: krate,
+        has_canonical_path: true,
+        reachable_pub_api: false,
+    };
+    let body = |from: u32, to: u32| Edge {
+        from: ItemId(from),
+        to: ItemId(to),
+        kind: RefKind::Body,
+        weight: 1,
+    };
+    let ir = CrateGraph {
+        schema_version: SCHEMA_VERSION,
+        ra_version: String::new(),
+        root_crate: krate,
+        crates: vec![Crate {
+            id: krate,
+            name: "k".to_owned(),
+            is_local: true,
+            root_module: ModuleId(0),
+        }],
+        modules: vec![
+            m(0, None, 0, ModuleKind::Mod),
+            m(1, Some(0), 1, ModuleKind::Type),
+            m(2, Some(0), 1, ModuleKind::Type),
+        ],
+        items: vec![
+            it(0, 1, ItemKind::Struct),  // Foo
+            it(1, 1, ItemKind::AssocFn), // Foo::method
+            it(2, 2, ItemKind::Struct),  // Bar
+            it(3, 2, ItemKind::AssocFn), // Bar::method
+        ],
+        // Intra-type cohesion plus one cross-type edge.
+        edges: vec![body(1, 0), body(3, 2), body(3, 1)],
+    };
+    let result = analyze(&ir, &AnalysisConfig::default()).unwrap();
+    // The crate is one real module, but the type depth yields >= 2 communities,
+    // so the partition is no longer trivial.
+    assert_eq!(result.n_module_nodes, 1, "one real module");
+    assert!(
+        result
+            .modularity_profile
+            .iter()
+            .any(|r| r.communities_declared >= 2),
+        "the type level must give a non-trivial partition"
+    );
+}
+
+#[test]
 fn graph_with_module_items_scores_cleanly() {
     use modula_ir::{Edge, Item, ItemId, ItemKind, RefKind};
     // Two modules, each represented as a Module item owning itself, plus a
@@ -79,6 +152,7 @@ fn graph_with_module_items_scores_cleanly() {
         canonical_path: path.to_owned(),
         depth: u32::from(parent.is_some()),
         visibility: Visibility::Public,
+        kind: ModuleKind::Mod,
     };
     let item = |id: u32, path: &str, owner: u32, kind: ItemKind| Item {
         id: ItemId(id),

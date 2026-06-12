@@ -123,8 +123,12 @@ fn over_exposed(ir: &CrateGraph) -> Vec<OverExposure> {
 }
 
 /// The narrowest visibility that still lets every consumer reach `item`.
+///
+/// Visibility is reasoned about at the real-module level (type containers are
+/// climbed to their `mod`), because Rust has no per-type visibility scope, so
+/// over-exposure must be expressible as actual `pub`/`pub(crate)`/`pub(super)`.
 fn required_visibility(ir: &CrateGraph, item: ItemId, consumers: &[ItemId]) -> Visibility {
-    let owner = ir.item(item).owning_module;
+    let owner = ir.real_module(ir.item(item).owning_module);
     let krate = ir.item(item).crate_id;
     let mut required = Visibility::Private;
     for &consumer in consumers {
@@ -132,7 +136,7 @@ fn required_visibility(ir: &CrateGraph, item: ItemId, consumers: &[ItemId]) -> V
             ir,
             owner,
             krate,
-            ir.item(consumer).owning_module,
+            ir.real_module(ir.item(consumer).owning_module),
             ir.item(consumer).crate_id,
         );
         if needed.restrictiveness() > required.restrictiveness() {
@@ -243,7 +247,9 @@ fn leaks(ir: &CrateGraph) -> Result<(Vec<Leak>, f64), EncapsulationError> {
 
 #[cfg(test)]
 mod tests {
-    use modula_ir::{Crate, CrateGraph, CrateId, Module, ModuleId, SCHEMA_VERSION, Visibility};
+    use modula_ir::{
+        Crate, CrateGraph, CrateId, Module, ModuleId, ModuleKind, SCHEMA_VERSION, Visibility,
+    };
 
     use super::is_within_subtree;
 
@@ -259,6 +265,7 @@ mod tests {
                 canonical_path: format!("c::m{i}"),
                 depth: u32::from(i != 0),
                 visibility: Visibility::Public,
+                kind: ModuleKind::Mod,
             })
             .collect();
         CrateGraph {

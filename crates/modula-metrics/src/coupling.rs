@@ -73,7 +73,9 @@ pub fn module_coupling(ir: &CrateGraph, agg: &ModuleAggregation) -> Vec<ModuleCo
 mod tests {
     use std::collections::BTreeMap;
 
-    use modula_ir::{Crate, CrateGraph, CrateId, Module, ModuleId, SCHEMA_VERSION, Visibility};
+    use modula_ir::{
+        Crate, CrateGraph, CrateId, Module, ModuleId, ModuleKind, SCHEMA_VERSION, Visibility,
+    };
 
     use super::module_coupling;
     use crate::module_graph::ModuleAggregation;
@@ -88,6 +90,7 @@ mod tests {
                 canonical_path: format!("c::m{i}"),
                 depth: u32::from(i != 0),
                 visibility: Visibility::Public,
+                kind: ModuleKind::Mod,
             })
             .collect();
         CrateGraph {
