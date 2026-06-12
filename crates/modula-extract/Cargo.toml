@@ -10,8 +10,6 @@ description = "rust-analyzer based extraction of the modula-rs intermediate repr
 
 [dependencies]
 modula-ir.workspace = true
-serde.workspace = true
-thiserror.workspace = true
 anyhow.workspace = true
 
 # rust-analyzer as a library. These are the only heavy/unstable dependencies in
@@ -19,7 +17,6 @@ anyhow.workspace = true
 # unstable and changes between snapshots.
 ra_ap_hir = "=0.0.336"
 ra_ap_ide = "=0.0.336"
-ra_ap_ide_db = "=0.0.336"
 ra_ap_load-cargo = "=0.0.336"
 ra_ap_paths = "=0.0.336"
 ra_ap_project_model = "=0.0.336"

@@ -991,15 +991,12 @@ dependencies = [
  "modula-ir",
  "ra_ap_hir",
  "ra_ap_ide",
- "ra_ap_ide_db",
  "ra_ap_load-cargo",
  "ra_ap_paths",
  "ra_ap_project_model",
  "ra_ap_syntax",
  "ra_ap_vfs",
- "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]

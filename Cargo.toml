@@ -5,7 +5,8 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.86"
+# Dictated by the rust-analyzer (`ra_ap_*`) crates, which require Rust 1.95.
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/LucaCappelletti94/modula-rs"
 authors = ["Luca Cappelletti <cappelletti.luca94@gmail.com>"]
