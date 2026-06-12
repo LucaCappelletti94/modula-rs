@@ -391,6 +391,9 @@ mod unit_tests {
         assert!(d.vi > 0.0, "orthogonal partitions have positive VI");
         // Normalized VI stays in (0, 1].
         assert!(d.vi_normalized > 0.0 && d.vi_normalized <= 1.0 + 1e-12);
+        // ARI of two orthogonal 2x2 partitions is exactly -0.5, which pins the
+        // sign and arithmetic of the (observed - expected) ARI numerator.
+        assert!((d.ari + 0.5).abs() < 1e-9, "orthogonal ARI is -0.5");
     }
 
     #[test]

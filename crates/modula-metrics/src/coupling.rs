@@ -68,3 +68,68 @@ pub fn module_coupling(ir: &CrateGraph, agg: &ModuleAggregation) -> Vec<ModuleCo
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use modula_ir::{Crate, CrateGraph, CrateId, Module, ModuleId, SCHEMA_VERSION, Visibility};
+
+    use super::module_coupling;
+    use crate::module_graph::ModuleAggregation;
+
+    fn graph_with_modules(n: u32) -> CrateGraph {
+        let modules = (0..n)
+            .map(|i| Module {
+                id: ModuleId(i),
+                crate_id: CrateId(0),
+                parent: (i != 0).then_some(ModuleId(0)),
+                name: format!("m{i}"),
+                canonical_path: format!("c::m{i}"),
+                depth: u32::from(i != 0),
+                visibility: Visibility::Public,
+            })
+            .collect();
+        CrateGraph {
+            schema_version: SCHEMA_VERSION,
+            ra_version: String::new(),
+            root_crate: CrateId(0),
+            crates: vec![Crate {
+                id: CrateId(0),
+                name: "c".to_owned(),
+                is_local: true,
+                root_module: ModuleId(0),
+            }],
+            modules,
+            items: Vec::new(),
+            edges: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn coupling_computes_instability_and_handles_isolated_nodes() {
+        // Node 0: out to 1 and 2 (ce = 2), in from 1 (ca = 1). Node 3: no edges.
+        let inter: BTreeMap<(usize, usize), f64> = [((0, 1), 1.0), ((0, 2), 1.0), ((1, 0), 1.0)]
+            .into_iter()
+            .collect();
+        let agg = ModuleAggregation {
+            nodes: vec![ModuleId(0), ModuleId(1), ModuleId(2), ModuleId(3)],
+            index_of: (0..4u32).map(|i| (ModuleId(i), i as usize)).collect(),
+            intra: vec![1.0, 0.0, 0.0, 0.0],
+            inter,
+        };
+        let coupling = module_coupling(&graph_with_modules(4), &agg);
+
+        let node0 = &coupling[0];
+        assert_eq!((node0.ca, node0.ce), (1, 2));
+        // instability = ce / (ca + ce) = 2/3.
+        assert!((node0.instability.unwrap() - 2.0 / 3.0).abs() < 1e-12);
+        // cohesion = intra / total = 1 / (1 + 2 + 1) = 0.25.
+        assert!((node0.cohesion.unwrap() - 0.25).abs() < 1e-12);
+
+        // The isolated node has no edges, so both ratios are undefined.
+        let node3 = &coupling[3];
+        assert_eq!(node3.cohesion, None);
+        assert_eq!(node3.instability, None);
+    }
+}

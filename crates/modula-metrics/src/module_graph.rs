@@ -74,3 +74,33 @@ impl ModuleAggregation {
         self.nodes.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use modula_ir::ModuleId;
+
+    use super::ModuleAggregation;
+
+    #[test]
+    fn is_empty_reflects_node_count() {
+        let empty = ModuleAggregation {
+            nodes: Vec::new(),
+            index_of: HashMap::new(),
+            intra: Vec::new(),
+            inter: BTreeMap::new(),
+        };
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let one = ModuleAggregation {
+            nodes: vec![ModuleId(0)],
+            index_of: [(ModuleId(0), 0)].into_iter().collect(),
+            intra: vec![0.0],
+            inter: BTreeMap::new(),
+        };
+        assert!(!one.is_empty());
+        assert_eq!(one.len(), 1);
+    }
+}

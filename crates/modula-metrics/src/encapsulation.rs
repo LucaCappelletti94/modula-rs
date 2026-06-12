@@ -240,3 +240,50 @@ fn leaks(ir: &CrateGraph) -> Result<(Vec<Leak>, f64), EncapsulationError> {
     });
     Ok((leaks, mean_leak_cost))
 }
+
+#[cfg(test)]
+mod tests {
+    use modula_ir::{Crate, CrateGraph, CrateId, Module, ModuleId, SCHEMA_VERSION, Visibility};
+
+    use super::is_within_subtree;
+
+    /// Tree: 0 root; 1 child of 0; 2 child of 1; 3 child of 0.
+    fn tree() -> CrateGraph {
+        let parents = [None, Some(0u32), Some(1), Some(0)];
+        let modules = (0..4u32)
+            .map(|i| Module {
+                id: ModuleId(i),
+                crate_id: CrateId(0),
+                parent: parents[i as usize].map(ModuleId),
+                name: format!("m{i}"),
+                canonical_path: format!("c::m{i}"),
+                depth: u32::from(i != 0),
+                visibility: Visibility::Public,
+            })
+            .collect();
+        CrateGraph {
+            schema_version: SCHEMA_VERSION,
+            ra_version: String::new(),
+            root_crate: CrateId(0),
+            crates: vec![Crate {
+                id: CrateId(0),
+                name: "c".to_owned(),
+                is_local: true,
+                root_module: ModuleId(0),
+            }],
+            modules,
+            items: Vec::new(),
+            edges: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn within_subtree_walks_ancestors() {
+        let g = tree();
+        assert!(is_within_subtree(&g, ModuleId(2), ModuleId(1)));
+        assert!(is_within_subtree(&g, ModuleId(2), ModuleId(0)));
+        assert!(is_within_subtree(&g, ModuleId(1), ModuleId(1)));
+        // Sibling branch: 3 is not under 1.
+        assert!(!is_within_subtree(&g, ModuleId(3), ModuleId(1)));
+    }
+}
