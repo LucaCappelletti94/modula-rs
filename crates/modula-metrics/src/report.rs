@@ -106,10 +106,14 @@ pub fn to_human(result: &AnalysisResult) -> String {
     let _ = writeln!(s);
 
     let c = &result.composite;
-    let _ = writeln!(s, "Headline score: {} / 1.000", opt(c.headline));
-    let _ = writeln!(s, "  depth-averaged : {}", opt(c.headline_depth_averaged));
-    let _ = writeln!(s, "  modularity     : {}", opt(c.modularity_term));
-    let _ = writeln!(s, "  divergence     : {}", opt(c.divergence_term));
+    let _ = writeln!(s, "Headline score: {:>5} / 1.000", opt(c.headline));
+    let _ = writeln!(
+        s,
+        "  depth-averaged : {:>5}",
+        opt(c.headline_depth_averaged)
+    );
+    let _ = writeln!(s, "  modularity     : {:>5}", opt(c.modularity_term));
+    let _ = writeln!(s, "  divergence     : {:>5}", opt(c.divergence_term));
     let _ = writeln!(s, "  acyclicity     : {:.3}", c.acyclicity_term);
     let _ = writeln!(s, "  encapsulation  : {:.3}", c.encapsulation_term);
     let _ = writeln!(s);
@@ -130,9 +134,9 @@ pub fn to_human(result: &AnalysisResult) -> String {
         for m in leakiest.iter().take(5) {
             let _ = writeln!(
                 s,
-                "  {:<28} {:>5} | {:>2} | {:>2} | {}",
+                "  {:<28} {:>5} | {:>2} | {:>2} | {:>5}",
                 m.path,
-                fmt_opt(m.cohesion),
+                opt(m.cohesion),
                 m.ca,
                 m.ce,
                 opt(m.instability)
@@ -196,7 +200,7 @@ pub fn to_human(result: &AnalysisResult) -> String {
     for r in &result.modularity_profile {
         let _ = writeln!(
             s,
-            "  d{} c{:<3} U {:>7.3}/{:>7.3} e {}  D {:>7.3}/{:>7.3} e {}",
+            "  d{} c{:<3} U {:>7.3}/{:>7.3} e {:>5}  D {:>7.3}/{:>7.3} e {:>5}",
             r.depth,
             r.communities_declared,
             r.q_declared_undirected,
@@ -222,13 +226,9 @@ pub fn to_human(result: &AnalysisResult) -> String {
     s
 }
 
-/// Formats an optional ratio as a fixed-width value or `n/a`.
+/// Formats an optional ratio as a 3-decimal value or `n/a`. Call sites apply
+/// their own width spec (e.g. `{:>5}`) when column alignment matters.
 fn opt(value: Option<f64>) -> String {
-    value.map_or_else(|| "  n/a".to_owned(), |v| format!("{v:.3}"))
-}
-
-/// Formats an optional cohesion value (right-aligned).
-fn fmt_opt(value: Option<f64>) -> String {
     value.map_or_else(|| "n/a".to_owned(), |v| format!("{v:.3}"))
 }
 

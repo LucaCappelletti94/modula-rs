@@ -123,3 +123,18 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
         composite,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AnalysisError;
+
+    #[test]
+    fn modularity_error_converts_into_analysis_error() {
+        // The manual `From<ModularityError>` is what `?` uses when the detector
+        // rejects an input; exercise it directly so it does not rely on a
+        // contrived detector failure.
+        use geometric_traits::traits::algorithms::ModularityError;
+        let err: AnalysisError = ModularityError::InvalidResolution.into();
+        assert!(matches!(err, AnalysisError::Modularity(_)));
+    }
+}
