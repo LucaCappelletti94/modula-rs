@@ -33,6 +33,8 @@ pub struct ExtractArgs {
     pub db_path: String,
     pub min_downloads: i64,
     pub jobs: usize,
+    /// `CARGO_BUILD_JOBS` per worker; total compile fan-out is `jobs * build_jobs`.
+    pub build_jobs: usize,
     pub timeout: Duration,
     pub limit: Option<usize>,
 }
@@ -123,9 +125,11 @@ pub fn run(args: &ExtractArgs) -> Result<()> {
         args.jobs
     );
 
-    // Each concurrent crate gets ~ (cores / jobs) build threads so N parallel
-    // cargo invocations do not oversubscribe the machine.
-    let build_jobs = (num_cpus().max(2) / args.jobs.max(1)).max(2);
+    // Total compile parallelism is `jobs * build_jobs`, and each worker also
+    // drives a rust-analyzer instance. `build_jobs` defaults to 1 so `--jobs N`
+    // bounds CPU to roughly N: each worker's `cargo check` builds the crate's
+    // dependency tree serially rather than fanning out and oversubscribing.
+    let build_jobs = args.build_jobs.max(1);
 
     let conn = Mutex::new(conn);
     let next = AtomicUsize::new(0);
@@ -541,12 +545,6 @@ fn now_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-fn num_cpus() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(16)
 }
 
 /// A progress bar for a per-crate loop. On a non-TTY (a redirected log) the live

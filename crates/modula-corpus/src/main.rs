@@ -43,8 +43,14 @@ enum Command {
         db: String,
         #[arg(long, default_value_t = 100_000)]
         min_downloads: i64,
-        #[arg(long, default_value_t = 12)]
+        #[arg(long, default_value_t = 12, help = "concurrent crates (~ cores used)")]
         jobs: usize,
+        #[arg(
+            long,
+            default_value_t = 1,
+            help = "CARGO_BUILD_JOBS per worker; total compile fan-out is jobs * build_jobs"
+        )]
+        build_jobs: usize,
         #[arg(long, default_value_t = 1200, value_name = "SECONDS")]
         timeout: u64,
         #[arg(long, help = "cap the work-list (for testing)")]
@@ -79,6 +85,7 @@ fn main() -> Result<()> {
             db,
             min_downloads,
             jobs,
+            build_jobs,
             timeout,
             limit,
         } => extract::run(&extract::ExtractArgs {
@@ -86,6 +93,7 @@ fn main() -> Result<()> {
             db_path: db,
             min_downloads,
             jobs,
+            build_jobs,
             timeout: Duration::from_secs(timeout),
             limit,
         }),
