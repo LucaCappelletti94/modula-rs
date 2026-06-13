@@ -279,4 +279,110 @@ mod tests {
         r.mean_leak_cost = Some(f64::INFINITY);
         assert_eq!(anomalies(&r).as_deref(), Some("mean_leak_cost=nonfinite"));
     }
+
+    #[test]
+    fn mean_and_median_skip_none_and_handle_empty() {
+        let near = |got: Option<f64>, want: f64| matches!(got, Some(x) if (x - want).abs() < 1e-12);
+        assert!(near(
+            mean_opt([Some(0.2), None, Some(0.4)].into_iter()),
+            0.3
+        ));
+        assert_eq!(mean_opt([None, None].into_iter()), None);
+        assert_eq!(mean_opt(std::iter::empty::<Option<f64>>()), None);
+        // Sorted [0.2, 0.4, 0.8] -> middle element is 0.4.
+        assert_eq!(
+            median_opt([Some(0.4), Some(0.2), Some(0.8)].into_iter()),
+            Some(0.4)
+        );
+        // Even count [0.2, 0.8] -> upper-middle (index len/2 = 1) is 0.8.
+        assert_eq!(median_opt([Some(0.8), Some(0.2)].into_iter()), Some(0.8));
+        assert_eq!(median_opt(std::iter::empty::<Option<f64>>()), None);
+    }
+
+    /// A two-module crate whose modules mutually depend, so the analysis has a
+    /// real cycle, real cross-module leaks, and defined instability.
+    fn cyclic_ir() -> modula_ir::CrateGraph {
+        use modula_ir::{
+            Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+            RefKind, SCHEMA_VERSION, Visibility,
+        };
+        let m = |id: u32, parent: Option<u32>, depth: u32| Module {
+            id: ModuleId(id),
+            crate_id: CrateId(0),
+            parent: parent.map(ModuleId),
+            name: format!("m{id}"),
+            canonical_path: format!("c::m{id}"),
+            depth,
+            visibility: Visibility::Public,
+            kind: ModuleKind::Mod,
+        };
+        let it = |id: u32, owner: u32| Item {
+            id: ItemId(id),
+            canonical_path: format!("c::i{id}"),
+            kind: ItemKind::Struct,
+            visibility: Visibility::Public,
+            owning_module: ModuleId(owner),
+            crate_id: CrateId(0),
+            has_canonical_path: true,
+            reachable_pub_api: false,
+        };
+        let body = |from: u32, to: u32| Edge {
+            from: ItemId(from),
+            to: ItemId(to),
+            kind: RefKind::Body,
+            weight: 1,
+        };
+        CrateGraph {
+            schema_version: SCHEMA_VERSION,
+            ra_version: String::new(),
+            root_crate: CrateId(0),
+            crates: vec![Crate {
+                id: CrateId(0),
+                name: "c".to_owned(),
+                is_local: true,
+                root_module: ModuleId(0),
+            }],
+            modules: vec![m(0, None, 0), m(1, Some(0), 1), m(2, Some(0), 1)],
+            items: vec![it(0, 1), it(1, 2)],
+            edges: vec![body(0, 1), body(1, 0)],
+        }
+    }
+
+    #[test]
+    fn fill_mirrors_the_analysis_result() {
+        use modula_metrics::analysis::{AnalysisConfig, analyze};
+        let ir = cyclic_ir();
+        let a = analyze(&ir, &AnalysisConfig::default()).expect("analysis");
+        // The fixture must genuinely be cyclic, or the cycle-severity mapping is
+        // exercised only on empty data.
+        assert!(!a.tangles.is_acyclic);
+        assert!(a.tangles.largest_scc >= 2);
+
+        let mut r = row();
+        fill(&mut r, &a);
+
+        assert_eq!(r.status, "ok");
+        assert_eq!(r.is_acyclic, Some(0));
+        assert_eq!(r.n_sccs, Some(a.tangles.sccs.len() as i32));
+        assert_eq!(r.largest_scc, Some(a.tangles.largest_scc as i32));
+        assert_eq!(
+            r.modules_in_cycles,
+            Some(a.tangles.sccs.iter().map(Vec::len).sum::<usize>() as i32)
+        );
+        assert_eq!(
+            r.n_cross_module_edges,
+            Some(a.encapsulation.deepest_leaks.len() as i32)
+        );
+        assert_eq!(
+            r.max_leak_cost,
+            a.encapsulation.deepest_leaks.first().map(|l| l.leak_cost)
+        );
+        assert_eq!(
+            r.mean_instability,
+            mean_opt(a.modules.iter().map(|m| m.instability))
+        );
+        // Mutually-dependent modules each have Ca = Ce = 1, so instability is
+        // defined and non-trivial.
+        assert_eq!(r.mean_instability, Some(0.5));
+    }
 }

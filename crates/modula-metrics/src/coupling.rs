@@ -91,9 +91,10 @@ pub fn module_coupling(ir: &CrateGraph, agg: &ModuleAggregation) -> Vec<ModuleCo
             let cohesion = (total > 0.0).then(|| intra / total);
             let (ca, ce) = (in_degree[i], out_degree[i]);
             let instability = (ca + ce > 0).then(|| ce as f64 / (ca + ce) as f64);
+            // `type_composition` only records a module once it has a type, so a
+            // present entry always has `types >= 1` (no division by zero).
             let abstractness = composition
                 .get(&agg.nodes[i])
-                .filter(|&&(_, types)| types > 0)
                 .map(|&(abstr, types)| f64::from(abstr) / f64::from(types));
             let distance_main_sequence = match (abstractness, instability) {
                 (Some(a), Some(i)) => Some((a + i - 1.0).abs()),

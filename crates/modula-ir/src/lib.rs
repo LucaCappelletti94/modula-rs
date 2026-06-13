@@ -350,6 +350,42 @@ mod tests {
     }
 
     #[test]
+    fn graph_item_ids_and_n_real_items_exclude_module_stubs() {
+        let mut g = sample();
+        // Append a `Module` stub item (the kind excluded from the item graph).
+        g.items.push(Item {
+            id: ItemId(4),
+            canonical_path: "c::stub".to_owned(),
+            kind: ItemKind::Module,
+            visibility: Visibility::Public,
+            owning_module: ModuleId(1),
+            crate_id: CrateId(0),
+            has_canonical_path: true,
+            reachable_pub_api: false,
+        });
+        assert_eq!(g.items.len(), 5);
+        // The four functions are real items; the module stub is not.
+        assert_eq!(g.n_real_items(), 4);
+        let ids = g.graph_item_ids();
+        assert_eq!(ids, vec![ItemId(0), ItemId(1), ItemId(2), ItemId(3)]);
+        assert!(!ids.contains(&ItemId(4)), "module stub is excluded");
+    }
+
+    #[test]
+    fn partition_of_nodes_groups_only_the_given_nodes() {
+        let g = sample();
+        // Items 0 (mod a) and 1 (mod b, child of a) roll up to a at depth 1;
+        // item 3 (mod c) is its own community.
+        let nodes = [ItemId(0), ItemId(1), ItemId(3)];
+        let p = g.partition_of_nodes(&nodes, 1);
+        assert_eq!(p.len(), 3, "aligned with the given nodes only");
+        assert_eq!(p[0], p[1], "items 0 and 1 share module a at depth 1");
+        assert_ne!(p[0], p[2], "item 3 (module c) is a separate community");
+        // Community ids are contiguous from zero.
+        assert_eq!(p, vec![0, 0, 1]);
+    }
+
+    #[test]
     fn module_public_reachable_requires_pub_chain() {
         let g = sample();
         assert!(g.module_public_reachable(ModuleId(0)));
