@@ -18,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use flate2::read::GzDecoder;
+use indicatif::{ProgressBar, ProgressStyle};
 use modula_extract::{ExtractOptions, Extractor, RaExtractor};
 use tar::Archive;
 
@@ -92,12 +93,17 @@ pub fn run(args: &ExtractArgs) -> Result<()> {
     let agent = http::agent()?;
     ensure_dump(&agent, &dump_path)?;
 
-    println!("parsing db-dump (>= {} downloads) ...", args.min_downloads);
+    let spinner = ProgressBar::new_spinner();
+    spinner.enable_steady_tick(Duration::from_millis(120));
+    spinner.set_message(format!(
+        "parsing db-dump (>= {} downloads) ...",
+        args.min_downloads
+    ));
     let mut work = dump::build_worklist(
         dump_path.to_str().context("dump path not utf-8")?,
         args.min_downloads,
     )?;
-    println!("work-list: {} crates", work.len());
+    spinner.finish_with_message(format!("work-list: {} crates", work.len()));
     if let Some(limit) = args.limit {
         work.truncate(limit);
     }
@@ -125,12 +131,12 @@ pub fn run(args: &ExtractArgs) -> Result<()> {
     let next = AtomicUsize::new(0);
     let done_count = AtomicUsize::new(0);
     let ok_count = AtomicUsize::new(0);
-    let start = Instant::now();
     let total = todo.len();
+    let pb = progress_bar(total as u64);
 
     std::thread::scope(|scope| {
         for slot in 0..args.jobs {
-            let (dirs, agent, exe, todo, next, conn, done_count, ok_count) = (
+            let (dirs, agent, exe, todo, next, conn, done_count, ok_count, pb) = (
                 &dirs,
                 &agent,
                 &exe,
@@ -139,47 +145,46 @@ pub fn run(args: &ExtractArgs) -> Result<()> {
                 &conn,
                 &done_count,
                 &ok_count,
+                &pb,
             );
             scope.spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(item) = todo.get(i) else { break };
                     let row = process(item, slot, dirs, agent, exe, build_jobs, args.timeout);
-                    let ok = row.status == "ok";
+                    if row.status == "ok" {
+                        ok_count.fetch_add(1, Ordering::Relaxed);
+                    }
                     {
                         let mut conn = conn.lock().expect("db mutex");
                         if let Err(e) = db::upsert_extraction(&mut conn, &row) {
-                            eprintln!("db write failed for {}-{}: {e:#}", row.name, row.version);
+                            pb.println(format!(
+                                "db write failed for {}-{}: {e:#}",
+                                row.name, row.version
+                            ));
                         }
                     }
                     let n = done_count.fetch_add(1, Ordering::Relaxed) + 1;
-                    if ok {
-                        ok_count.fetch_add(1, Ordering::Relaxed);
-                    }
-                    if n % 25 == 0 || n == total {
-                        let rate = n as f64 / start.elapsed().as_secs_f64();
-                        let eta_h = if rate > 0.0 {
-                            (total - n) as f64 / rate / 3600.0
-                        } else {
-                            0.0
-                        };
-                        println!(
-                            "[{}/{}] ok={} {:.0}/h eta={:.1}h last={} {}",
-                            n,
-                            total,
-                            ok_count.load(Ordering::Relaxed),
-                            rate * 3600.0,
-                            eta_h,
-                            item.name,
-                            row.status,
-                        );
+                    let ok = ok_count.load(Ordering::Relaxed);
+                    pb.inc(1);
+                    pb.set_message(format!("ok={ok} last={} {}", item.name, row.status));
+                    // Milestone lines so a non-TTY log (nohup) stays monitorable;
+                    // they print above the bar in a terminal.
+                    if n.is_multiple_of(250) || n == total {
+                        let secs = pb.elapsed().as_secs_f64().max(1e-9);
+                        let rate = n as f64 / secs;
+                        let eta_h = (total - n) as f64 / rate / 3600.0;
+                        pb.println(format!(
+                            "[{n}/{total}] ok={ok} {:.0}/h eta={eta_h:.1}h",
+                            rate * 3600.0
+                        ));
                     }
                 }
             });
         }
     });
 
-    println!("done.");
+    pb.finish_with_message("done");
     Ok(())
 }
 
@@ -542,6 +547,20 @@ fn num_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(16)
+}
+
+/// A progress bar for a per-crate loop. On a non-TTY (a redirected log) the live
+/// bar hides itself, so callers also emit periodic milestone `println`s.
+pub(crate) fn progress_bar(len: u64) -> ProgressBar {
+    let pb = ProgressBar::new(len);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {per_sec} eta {eta} {msg}",
+        )
+        .expect("valid progress template")
+        .progress_chars("=>-"),
+    );
+    pb
 }
 
 /// `None` for an empty metadata string, so absent tags are stored as SQL NULL.

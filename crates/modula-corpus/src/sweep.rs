@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
+use indicatif::ParallelProgressIterator as _;
 use modula_ir::CrateGraph;
 use modula_metrics::analysis::{AnalysisConfig, AnalysisResult, analyze};
 use rayon::prelude::*;
@@ -28,22 +29,16 @@ pub fn run(args: &SweepArgs) -> Result<()> {
     let extractions = db::extractions_with_ir(&mut conn)?;
     println!("sweeping {} extracted crates ...", extractions.len());
 
-    let done = AtomicUsize::new(0);
     let total = extractions.len();
     let start = Instant::now();
+    let pb = crate::extract::progress_bar(total as u64);
 
     let rows: Vec<Analysis> = extractions
         .par_iter()
-        .map(|e| {
-            let row = analyze_one(e);
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n.is_multiple_of(1000) || n == total {
-                let rate = n as f64 / start.elapsed().as_secs_f64();
-                println!("[{n}/{total}] {rate:.0}/s");
-            }
-            row
-        })
+        .progress_with(pb.clone())
+        .map(analyze_one)
         .collect();
+    pb.finish_and_clear();
 
     // Writes are serial (diesel SqliteConnection is single-threaded); they are
     // cheap relative to the parallel analysis above.
