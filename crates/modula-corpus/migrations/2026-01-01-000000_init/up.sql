@@ -11,6 +11,11 @@ CREATE TABLE extractions (
     n_edges      INTEGER,
     elapsed_sec  DOUBLE,
     error        TEXT,
+    -- Comma-joined crates.io metadata captured from the db-dump: `categories`
+    -- is the curated/standardized taxonomy (slugs like `parsing`,
+    -- `command-line-utilities`); `keywords` are free-form author tag slugs.
+    categories   TEXT,
+    keywords     TEXT,
     ts           BIGINT  NOT NULL,  -- unix seconds
     PRIMARY KEY (name, version)
 );

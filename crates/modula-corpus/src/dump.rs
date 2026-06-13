@@ -20,6 +20,11 @@ pub struct CrateVersion {
     pub name: String,
     pub version: String,
     pub downloads: i64,
+    /// Comma-joined crates.io category slugs (the standardized taxonomy), or
+    /// empty when the crate has none.
+    pub categories: String,
+    /// Comma-joined crates.io keyword slugs (free-form), or empty.
+    pub keywords: String,
 }
 
 /// Streams `dump_path` once and returns every crate whose download count is at
@@ -29,6 +34,11 @@ pub fn build_worklist(dump_path: &str, min_downloads: i64) -> Result<Vec<CrateVe
     let mut names: HashMap<i64, String> = HashMap::new();
     let mut default_vid: HashMap<i64, i64> = HashMap::new();
     let mut vid_num: HashMap<i64, String> = HashMap::new();
+    // Metadata: id -> slug, plus crate_id -> [id]. Joined to slug strings below.
+    let mut cat_slug: HashMap<i64, String> = HashMap::new();
+    let mut crate_cats: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut kw_slug: HashMap<i64, String> = HashMap::new();
+    let mut crate_kws: HashMap<i64, Vec<i64>> = HashMap::new();
 
     let file = File::open(dump_path).with_context(|| format!("opening dump {dump_path}"))?;
     let mut archive = Archive::new(GzDecoder::new(BufReader::new(file)));
@@ -66,6 +76,28 @@ pub fn build_worklist(dump_path: &str, min_downloads: i64) -> Result<Vec<CrateVe
                     vid_num.insert(id, num.to_owned());
                 }
             })?,
+            "categories.csv" => two_col(&mut entry, "id", "slug", |id, slug| {
+                if let Ok(id) = id.parse::<i64>() {
+                    cat_slug.insert(id, slug.to_owned());
+                }
+            })?,
+            "crates_categories.csv" => {
+                two_col(&mut entry, "crate_id", "category_id", |cid, catid| {
+                    if let (Ok(cid), Ok(catid)) = (cid.parse::<i64>(), catid.parse::<i64>()) {
+                        crate_cats.entry(cid).or_default().push(catid);
+                    }
+                })?
+            }
+            "keywords.csv" => two_col(&mut entry, "id", "keyword", |id, kw| {
+                if let Ok(id) = id.parse::<i64>() {
+                    kw_slug.insert(id, kw.to_owned());
+                }
+            })?,
+            "crates_keywords.csv" => two_col(&mut entry, "crate_id", "keyword_id", |cid, kwid| {
+                if let (Ok(cid), Ok(kwid)) = (cid.parse::<i64>(), kwid.parse::<i64>()) {
+                    crate_kws.entry(cid).or_default().push(kwid);
+                }
+            })?,
             _ => continue,
         }
     }
@@ -80,6 +112,8 @@ pub fn build_worklist(dump_path: &str, min_downloads: i64) -> Result<Vec<CrateVe
                 name: name.clone(),
                 version: num.clone(),
                 downloads: dl,
+                categories: join_slugs(crate_cats.get(&cid), &cat_slug),
+                keywords: join_slugs(crate_kws.get(&cid), &kw_slug),
             })
         })
         .collect();
@@ -89,6 +123,20 @@ pub fn build_worklist(dump_path: &str, min_downloads: i64) -> Result<Vec<CrateVe
             .then_with(|| a.name.cmp(&b.name))
     });
     Ok(work)
+}
+
+/// Resolves a crate's metadata ids to their slugs, sorted and comma-joined
+/// (sorted so the string is deterministic across runs).
+fn join_slugs(ids: Option<&Vec<i64>>, slugs: &HashMap<i64, String>) -> String {
+    let Some(ids) = ids else {
+        return String::new();
+    };
+    let mut out: Vec<&str> = ids
+        .iter()
+        .filter_map(|id| slugs.get(id).map(String::as_str))
+        .collect();
+    out.sort_unstable();
+    out.join(",")
 }
 
 /// Parses a CSV stream, invoking `f(col_a, col_b)` for every row.

@@ -204,6 +204,8 @@ fn process(
         n_edges: None,
         elapsed_sec: None,
         error: None,
+        categories: non_empty(&item.categories),
+        keywords: non_empty(&item.keywords),
         ts: now_secs(),
     };
 
@@ -416,6 +418,11 @@ fn num_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(16)
+}
+
+/// `None` for an empty metadata string, so absent tags are stored as SQL NULL.
+fn non_empty(s: &str) -> Option<String> {
+    (!s.is_empty()).then(|| s.to_owned())
 }
 
 #[cfg(test)]

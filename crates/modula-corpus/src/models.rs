@@ -19,6 +19,10 @@ pub struct Extraction {
     pub n_edges: Option<i32>,
     pub elapsed_sec: Option<f64>,
     pub error: Option<String>,
+    /// Comma-joined crates.io category slugs (the standardized taxonomy).
+    pub categories: Option<String>,
+    /// Comma-joined crates.io keyword slugs (free-form author tags).
+    pub keywords: Option<String>,
     pub ts: i64,
 }
 

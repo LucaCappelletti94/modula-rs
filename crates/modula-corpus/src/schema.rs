@@ -12,6 +12,8 @@ diesel::table! {
         n_edges -> Nullable<Integer>,
         elapsed_sec -> Nullable<Double>,
         error -> Nullable<Text>,
+        categories -> Nullable<Text>,
+        keywords -> Nullable<Text>,
         ts -> BigInt,
     }
 }
