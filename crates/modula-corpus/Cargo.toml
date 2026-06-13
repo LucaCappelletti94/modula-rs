@@ -1,0 +1,50 @@
+[package]
+name = "modula-corpus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+# Internal corpus tooling: enumerate crates.io, extract IR once, then re-run the
+# metric sweep in-process as many times as calibration needs. Not shipped.
+
+# `libsqlite3-sys` is pulled only to enable the `bundled` SQLite build; it is
+# never referenced in source, so cargo-machete cannot see the use.
+[package.metadata.cargo-machete]
+ignored = ["libsqlite3-sys"]
+
+[dependencies]
+modula-ir.workspace = true
+modula-extract.workspace = true
+modula-metrics.workspace = true
+
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+# Persistence: diesel over a bundled SQLite (no system libsqlite needed).
+diesel = { version = "2.2", features = [
+    "sqlite",
+    "returning_clauses_for_sqlite_3_35",
+] }
+diesel_migrations = { version = "2.2", features = ["sqlite"] }
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+
+# db-dump + crate tarballs.
+ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
+native-tls = "0.2"
+flate2 = "1"
+tar = "0.4"
+csv = "1.3"
+
+# Parallel in-process metric sweep.
+rayon = "1.10"
+
+# Plots (SVG, no font-rasterization / system deps).
+plotters = { version = "0.3", default-features = false, features = ["svg_backend"] }
+
+# Process-group timeout kill for the extract workers (Linux).
+libc = "0.2"

@@ -1,6 +1,16 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# `modula-corpus` is heavy internal tooling (diesel, plotters, an HTTP/TLS stack)
+# that the shipped crates do not depend on. Keep it out of the default build so
+# routine `cargo build`/`cargo test` stay fast; `--workspace` (and the cargo
+# deny / audit gates) still cover it.
+default-members = [
+    "crates/modula-ir",
+    "crates/modula-extract",
+    "crates/modula-metrics",
+    "crates/cargo-modula",
+]
 
 [workspace.package]
 version = "0.1.0"

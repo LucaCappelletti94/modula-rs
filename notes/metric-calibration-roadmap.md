@@ -2,7 +2,7 @@
 
 A roadmap derived from the 19,051-crate corpus sweep. The histograms showed prominent spikes; the investigation (read-only, on `/mnt/nvme/modula-corpus/sweep.db`) traced every spike to one of **three problem clusters**, plus confirmed that the divergence term is sound (see the closing note). This document states, per problem: the **meaning** we assign the metric, the **multiphase fix**, and how we **measure** that the fix worked. We implement one problem at a time.
 
-Shared baseline for all measurements: the current `sweep.db` (19,051 ok crates, >=100k downloads) and `corpus-v1.db` are the before snapshots on the NVMe; each fix is judged by re-running a sample (`tools/corpus/sweep.py --limit N` into a fresh DB) plus `socket2`/`smallvec`/`futures` as named probes, and re-plotting (`tools/corpus/plot.py`). Spikes that are real signal must NOT move; targeted spikes must redistribute.
+Shared baseline for all measurements: the current `sweep.db` (19,051 ok crates, >=100k downloads) and `corpus-v1.db` are the before snapshots on the NVMe; each fix is judged by re-running the corpus plus `socket2`/`smallvec`/`futures` as named probes, and re-plotting. Spikes that are real signal must NOT move; targeted spikes must redistribute. Tooling: the corpus is now the Rust `modula-corpus` crate (`extract` once to persist IR, then `sweep` re-runs the metrics in-process, `plot` renders the histograms); it replaced the earlier `tools/corpus/*.py` scripts. The historical `sweep-a/b/c.db` samples cited below were produced by that earlier Python harness.
 
 ---
 
