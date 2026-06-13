@@ -88,6 +88,12 @@ Meaning we assign: the type level should **inform the depth-sweep only** (where 
 - `smallvec`/`scopeguard`/`strsim` encapsulation and modularity terms become defensible; their headlines stay sensible and do NOT revert to vacuous 1.0.
 - Re-run the corpus; the flat-but-typed cohort's term distributions normalize.
 
+### Phase 1 result (leak-depth on the real-module tree, implemented)
+`encapsulation::leaks` now climbs both endpoints to their real `mod` via `real_module` before costing the edge, so two types in one module are intra-module (not a leak). Re-measurement first confirmed #4 is a genuine type-level artifact untouched by A+B (15% `mean_leak_cost>=0.999` on the sample, identical before and after A/B). After the fix, on 166 common-scored crates: FLAT crates (1 real mod) gain median headline +0.100 and encapsulation +0.500 (leak 1.00 -> 0.00, e.g. `smallvec` 0.382 -> 0.482; `strsim`, `scopeguard`, `lazy_static` drop out of the leak==1.0 spike, and the headlines do not revert to vacuous 1.0). MULTI-module crates (>=2 mods) move by median headline -0.006 and encapsulation -0.029 (noise): removing the spurious intra-module type-pair leaks (cost < 1, which had diluted the mean) leaves only genuine cross-module edges, and in a shallow 2-level tree any root-level-sibling reference has `lin == 0` (only shared ancestor is the root, information content 0), so `leak_cost == 1.0` is the correct maximal-distance signal. Note for later: the leak term is thus near-binary for shallow crates and only grades genuinely deep hierarchies (a property of Lin on shallow trees, not an artifact); revisit if the encapsulation leak half proves uninformative corpus-wide.
+
+### Phase 2 study (#5 modularity_term==0)
+On the post-A/B sample `modularity_term==0` is down to ~4% (from 7.1% baseline; A+B removed import/stub pollution as predicted). Of 10 residual: 3 are FLAT (`try-lock`, `tower-service`, `colorchoice`) where the synthetic per-type partition is anti-modular, a pure artifact; the other 7 are multi-module but their modularity term is still measured at the FINEST (type) depth rather than their real-module partition. Decision pending (roadmap option (i): measure the modularity term at the deepest real-module depth, vs (ii): report 0 honestly).
+
 ---
 
 ## Sequencing and interactions
