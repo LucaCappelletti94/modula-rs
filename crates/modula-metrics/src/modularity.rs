@@ -115,7 +115,7 @@ pub fn profiles(
     let mut modularity = Vec::new();
     let mut divergence = Vec::new();
     for depth in 0..=ir.max_depth() {
-        let declared = ir.partition_at_depth(depth);
+        let declared = ir.partition_of_nodes(&graphs.node_items, depth);
         let communities_declared = community_count(&declared);
 
         let q_declared_undirected = graphs

@@ -49,13 +49,16 @@ fn empty_crate() -> CrateGraph {
 fn aligned_scores_higher_than_crossing() {
     let clean = analyze(&aligned(), &AnalysisConfig::default()).unwrap();
     let leaky = analyze(&crossing(), &AnalysisConfig::default()).unwrap();
-    assert!(
-        clean.composite.headline > leaky.composite.headline,
-        "clean {} !> leaky {}",
-        clean.composite.headline,
-        leaky.composite.headline
-    );
-    assert!(clean.composite.headline > 0.0 && clean.composite.headline <= 1.0);
+    let clean_h = clean
+        .composite
+        .headline
+        .expect("aligned crate has structure");
+    let leaky_h = leaky
+        .composite
+        .headline
+        .expect("crossing crate has structure");
+    assert!(clean_h > leaky_h, "clean {clean_h} !> leaky {leaky_h}");
+    assert!(clean_h > 0.0 && clean_h <= 1.0);
 }
 
 #[test]
@@ -202,19 +205,29 @@ fn graph_with_module_items_scores_cleanly() {
     };
 
     let result = analyze(&ir, &AnalysisConfig::default()).expect("module-item graph analyzes");
-    assert!(result.composite.headline.is_finite());
+    assert!(
+        result
+            .composite
+            .headline
+            .expect("two real items in two modules give structure")
+            .is_finite()
+    );
     assert_eq!(result.n_items, 4);
+    // The two `ItemKind::Module` stubs are excluded; only the two functions are
+    // real graph nodes.
+    assert_eq!(result.n_real_items, 2);
 }
 
 #[test]
 fn empty_crate_is_handled() {
     let result = analyze(&empty_crate(), &AnalysisConfig::default()).unwrap();
     assert_eq!(result.n_items, 0);
+    assert_eq!(result.n_real_items, 0);
     assert!(result.modularity_profile.is_empty());
     assert!(result.divergence_profile.is_empty());
     assert!(result.tangles.is_acyclic);
-    // No structure to fault: the headline is well-defined and high.
-    assert!(result.composite.headline.is_finite());
+    // No measurable structure: the headline is N/A, not a vacuous number.
+    assert!(result.composite.headline.is_none());
 }
 
 #[test]

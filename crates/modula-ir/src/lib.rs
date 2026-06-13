@@ -140,6 +140,48 @@ impl CrateGraph {
         partition
     }
 
+    /// The ids of the items that participate in the item dependency graph: every
+    /// item except [`ItemKind::Module`] stub nodes. Module stubs exist only so
+    /// that `use` edges resolving to a module are well typed; they carry no
+    /// measurable internal structure, so the item-level metrics must not see
+    /// them (a pure re-export facade would otherwise look like a graph of
+    /// modules). Returned in ascending id order.
+    #[must_use]
+    pub fn graph_item_ids(&self) -> Vec<ItemId> {
+        self.items
+            .iter()
+            .filter(|item| item.kind != ItemKind::Module)
+            .map(|item| item.id)
+            .collect()
+    }
+
+    /// The number of real (graph-participating) items; see [`graph_item_ids`].
+    ///
+    /// [`graph_item_ids`]: Self::graph_item_ids
+    #[must_use]
+    pub fn n_real_items(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.kind != ItemKind::Module)
+            .count()
+    }
+
+    /// The partition induced by the module tree at `depth`, restricted to and
+    /// aligned with `nodes` (in the order given). Community ids are contiguous
+    /// `0..c` in first-appearance order, matching the node order of the item
+    /// graph built over the same `nodes`.
+    #[must_use]
+    pub fn partition_of_nodes(&self, nodes: &[ItemId], depth: u32) -> Vec<usize> {
+        let mut community_of: HashMap<ModuleId, usize> = HashMap::new();
+        let mut partition = Vec::with_capacity(nodes.len());
+        for &id in nodes {
+            let ancestor = self.ancestor_module_at_depth(self.item(id).owning_module, depth);
+            let next = community_of.len();
+            partition.push(*community_of.entry(ancestor).or_insert(next));
+        }
+        partition
+    }
+
     /// Whether `module` is reachable through an unbroken `pub` chain from its
     /// crate root: every module from `module` up to (but not including) the root
     /// must be [`Visibility::Public`]. The root itself imposes no requirement.

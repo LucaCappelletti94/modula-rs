@@ -36,15 +36,20 @@ impl Default for CompositeWeights {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct CompositeScore {
     /// Headline score in `[0, 1]`, taken at the primary (finest non-trivial)
-    /// depth.
-    pub headline: f64,
+    /// depth. `None` (N/A) when the crate has no measurable internal structure:
+    /// no module-tree depth yields more than one declared community (a single
+    /// module, or a pure re-export facade). Reporting a number there would
+    /// invent a vacuous score, so the headline is undefined instead.
+    pub headline: Option<f64>,
     /// Headline averaged over all non-trivial depths (more stable, less
-    /// interpretable).
-    pub headline_depth_averaged: f64,
+    /// interpretable). `None` under the same no-structure condition as
+    /// [`headline`](Self::headline).
+    pub headline_depth_averaged: Option<f64>,
     /// Modularity-efficiency term; `None` when no positive structure exists.
     pub modularity_term: Option<f64>,
-    /// Divergence term (AMI at the primary depth).
-    pub divergence_term: f64,
+    /// Divergence term (AMI at the primary depth); `None` when there is no
+    /// primary depth to measure against.
+    pub divergence_term: Option<f64>,
     /// Acyclicity term: fraction of module nodes not in any tangle.
     pub acyclicity_term: f64,
     /// Encapsulation term: blend of over-exposure and leak depth.
@@ -76,14 +81,21 @@ pub fn composite_score(
     let modularity_term = primary.and_then(mean_efficiency);
     let divergence_term = primary
         .and_then(|p| divergence.iter().find(|d| d.depth == p.depth))
-        .map_or(1.0, |d| d.ami.clamp(0.0, 1.0));
+        .map(|d| d.ami.clamp(0.0, 1.0));
 
-    let headline = weighted(&[
-        (weights.modularity, modularity_term),
-        (weights.divergence, Some(divergence_term)),
-        (weights.acyclicity, Some(acyclicity_term)),
-        (weights.encapsulation, Some(encapsulation_term)),
-    ]);
+    // A crate with no non-trivial declared partition at any depth has no
+    // measurable structure: the headline is N/A, not a vacuous blend of the
+    // structure-free terms (which would read ~1.0 for any small, clean crate).
+    let has_structure = primary.is_some();
+
+    let headline = has_structure.then(|| {
+        weighted(&[
+            (weights.modularity, modularity_term),
+            (weights.divergence, divergence_term),
+            (weights.acyclicity, Some(acyclicity_term)),
+            (weights.encapsulation, Some(encapsulation_term)),
+        ])
+    });
 
     // Depth-averaged variant over all non-trivial depths.
     let nontrivial: Vec<&DepthRecord> = modularity
@@ -96,14 +108,15 @@ pub fn composite_score(
             .iter()
             .find(|d| d.depth == r.depth)
             .map(|d| d.ami.clamp(0.0, 1.0))
-    }))
-    .unwrap_or(1.0);
-    let headline_depth_averaged = weighted(&[
-        (weights.modularity, avg_efficiency),
-        (weights.divergence, Some(avg_ami)),
-        (weights.acyclicity, Some(acyclicity_term)),
-        (weights.encapsulation, Some(encapsulation_term)),
-    ]);
+    }));
+    let headline_depth_averaged = has_structure.then(|| {
+        weighted(&[
+            (weights.modularity, avg_efficiency),
+            (weights.divergence, avg_ami),
+            (weights.acyclicity, Some(acyclicity_term)),
+            (weights.encapsulation, Some(encapsulation_term)),
+        ])
+    });
 
     CompositeScore {
         headline,

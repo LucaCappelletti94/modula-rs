@@ -30,6 +30,14 @@ Result: `headline==1.0` (6.9%) and `divergence==1.0` (9.8%) are mostly crates th
 - The `headline==1.0` and `divergence==1.0` spikes shrink to ~0; a new N/A bucket appears whose size we quantify.
 - Real-structure crates' headlines are unchanged (within float noise).
 
+### Result (implemented)
+Shipped all four phases: module-stub items excluded from the item graph/partition (`graph_item_ids`/`partition_of_nodes`/`n_real_items` in the IR; compact node space in `graph.rs`); `divergence_term`, `headline`, and `headline_depth_averaged` are now `Option` (`None` = N/A when no module-tree depth yields more than one declared community); CI `min_headline` gate passes vacuously on N/A; `n_real_items` added to the JSON and the sweep schema. Validated on a 235-crate sample (`sweep-a.db`, import=0 + Problem A) against `sweep-b.db` (import=0, no A):
+- **N/A bucket = 10%** (23/235): 11 pure re-export facades (`n_real_items == 0`, e.g. `futures` reports N/A instead of a vacuous ~1.0) plus 12 crates with real items but no non-trivial declared partition at any depth.
+- **Vacuous spikes fully collapsed**: `headline >= 0.999` 8% -> **0%**, `divergence >= 0.999` 8% -> **0%**. Every crate in those spikes (16 of each) is now N/A, i.e. the entire high-end was structureless crates.
+- **Real-structure crates unchanged**: of 212 crates defined in both, **median |delta headline| = 0.0038** (float noise); only 16 moved by >0.02, all small, legitimate refinements from dropping stub nodes (e.g. `either` 0.244 -> 0.331). Median headline 0.450 -> 0.444 (only because the vacuous high-end left the distribution).
+
+Final corpus-wide re-sweep and re-plot deferred until after Problem C, to avoid re-running the 19k sweep between every problem.
+
 ---
 
 ## Problem B -- `Import`/re-export edges manufacture false coupling and cycles

@@ -53,6 +53,11 @@ pub struct AnalysisResult {
     pub crate_name: String,
     /// Number of items analyzed.
     pub n_items: usize,
+    /// Number of real (graph-participating) items: `n_items` minus the
+    /// `ItemKind::Module` stub nodes. A crate whose only items are module stubs
+    /// (a pure re-export facade) has `n_real_items == 0` and no measurable
+    /// internal structure.
+    pub n_real_items: usize,
     /// Number of modules in the tree.
     pub n_modules: usize,
     /// Number of module nodes in the dependency graph (modules owning items).
@@ -78,6 +83,7 @@ pub struct AnalysisResult {
 pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResult, AnalysisError> {
     let crate_name = ir.krate(ir.root_crate).name.clone();
     let n_items = ir.items.len();
+    let n_real_items = ir.n_real_items();
     let n_modules = ir.modules.len();
 
     let agg = ModuleAggregation::build(ir, &config.weights);
@@ -86,8 +92,9 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
     let tangles = tangles(&agg, &config.cycles)?;
     let encapsulation = encapsulation(ir)?;
 
-    // Modularity and divergence need the item graphs; an empty crate has none.
-    let (modularity_profile, divergence_profile) = if n_items == 0 {
+    // Modularity and divergence need the item graphs; a crate with no real
+    // items (empty, or a pure module-stub facade) has none.
+    let (modularity_profile, divergence_profile) = if n_real_items == 0 {
         (Vec::new(), Vec::new())
     } else {
         let graphs = build_item_graphs(ir, &config.weights)?;
@@ -107,6 +114,7 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
     Ok(AnalysisResult {
         crate_name,
         n_items,
+        n_real_items,
         n_modules,
         n_module_nodes,
         modularity_profile,

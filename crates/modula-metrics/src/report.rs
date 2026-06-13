@@ -53,11 +53,16 @@ pub struct GateOutcome {
 pub fn evaluate_gates(result: &AnalysisResult, gates: &Gates) -> GateOutcome {
     let mut results = Vec::new();
     if let Some(min) = gates.min_headline {
+        // An N/A headline (no measurable structure) cannot fail the gate: there
+        // is nothing to score, so the gate passes vacuously.
         let value = result.composite.headline;
         results.push(GateResult {
             name: "min_headline".to_owned(),
-            passed: value >= min,
-            detail: format!("headline {value:.3} >= {min:.3}"),
+            passed: value.is_none_or(|v| v >= min),
+            detail: value.map_or_else(
+                || "headline n/a (insufficient structure)".to_owned(),
+                |v| format!("headline {v:.3} >= {min:.3}"),
+            ),
         });
     }
     if gates.require_acyclic {
@@ -101,10 +106,10 @@ pub fn to_human(result: &AnalysisResult) -> String {
     let _ = writeln!(s);
 
     let c = &result.composite;
-    let _ = writeln!(s, "Headline score: {:.3} / 1.000", c.headline);
-    let _ = writeln!(s, "  depth-averaged : {:.3}", c.headline_depth_averaged);
+    let _ = writeln!(s, "Headline score: {} / 1.000", opt(c.headline));
+    let _ = writeln!(s, "  depth-averaged : {}", opt(c.headline_depth_averaged));
     let _ = writeln!(s, "  modularity     : {}", opt(c.modularity_term));
-    let _ = writeln!(s, "  divergence     : {:.3}", c.divergence_term);
+    let _ = writeln!(s, "  divergence     : {}", opt(c.divergence_term));
     let _ = writeln!(s, "  acyclicity     : {:.3}", c.acyclicity_term);
     let _ = writeln!(s, "  encapsulation  : {:.3}", c.encapsulation_term);
     let _ = writeln!(s);
@@ -247,6 +252,7 @@ mod tests {
         AnalysisResult {
             crate_name: "demo".to_owned(),
             n_items: 1,
+            n_real_items: 1,
             n_modules: 1,
             n_module_nodes: 1,
             modularity_profile: Vec::new(),
@@ -266,10 +272,10 @@ mod tests {
                 mean_leak_cost: 0.0,
             },
             composite: CompositeScore {
-                headline,
-                headline_depth_averaged: headline,
+                headline: Some(headline),
+                headline_depth_averaged: Some(headline),
                 modularity_term: None,
-                divergence_term: 0.0,
+                divergence_term: Some(0.0),
                 acyclicity_term: 0.0,
                 encapsulation_term: 0.0,
                 weights: CompositeWeights::default(),

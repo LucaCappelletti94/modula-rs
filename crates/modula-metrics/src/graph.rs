@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use geometric_traits::{impls::ValuedCSR2D, prelude::*};
-use modula_ir::CrateGraph;
+use modula_ir::{CrateGraph, ItemId};
 
 use crate::weighting::RefKindWeights;
 
@@ -35,9 +35,19 @@ pub struct ItemGraphs {
     pub directed: WeightedGraph,
     /// Symmetrized undirected graph `U`.
     pub undirected: WeightedGraph,
+    /// The item id of each compact graph node (length `n`). Module-stub items
+    /// are excluded, so a node index is not in general equal to its item id;
+    /// callers that need a depth partition aligned with these nodes must use
+    /// [`CrateGraph::partition_of_nodes`] with this slice.
+    ///
+    /// [`CrateGraph::partition_of_nodes`]: modula_ir::CrateGraph::partition_of_nodes
+    pub node_items: Vec<ItemId>,
 }
 
 /// Builds the directed and undirected item graphs under the given weighting.
+///
+/// Only real items participate as nodes (`ItemKind::Module` stubs are excluded);
+/// edges touching a stub are dropped, since their endpoints are not graph nodes.
 ///
 /// # Errors
 /// Returns [`GraphError`] if the edge builder rejects the arcs.
@@ -45,26 +55,40 @@ pub fn build_item_graphs(
     graph: &CrateGraph,
     weights: &RefKindWeights,
 ) -> Result<ItemGraphs, GraphError> {
-    let n = graph.items.len();
-    let directed = directed_arcs(graph, weights);
+    let node_items = graph.graph_item_ids();
+    let n = node_items.len();
+    // Inverse map from item id to compact node index; `None` for excluded stubs.
+    let mut node_of = vec![None; graph.items.len()];
+    for (node, &id) in node_items.iter().enumerate() {
+        node_of[id.index()] = Some(node);
+    }
+    let directed = directed_arcs(graph, weights, &node_of);
     let undirected = symmetrize(&directed);
     Ok(ItemGraphs {
         n,
         directed: build(n, &directed)?,
         undirected: build(n, &undirected)?,
+        node_items,
     })
 }
 
 /// Collapses all IR edges into one directed arc per `(src, dst)`, summing
-/// weights across reference kinds. Arcs with non-positive weight are dropped
-/// (modularity requires strictly positive weights).
-fn directed_arcs(graph: &CrateGraph, weights: &RefKindWeights) -> Vec<(usize, usize, f64)> {
+/// weights across reference kinds. Endpoints are remapped through `node_of` to
+/// compact node indices; arcs with a non-positive weight or an endpoint that is
+/// not a graph node (a module stub) are dropped (modularity requires strictly
+/// positive weights over the node set).
+fn directed_arcs(
+    graph: &CrateGraph,
+    weights: &RefKindWeights,
+    node_of: &[Option<usize>],
+) -> Vec<(usize, usize, f64)> {
     let mut map: HashMap<(usize, usize), f64> = HashMap::new();
     for edge in &graph.edges {
         let w = weights.edge_weight(edge);
-        if w > 0.0 {
-            *map.entry((edge.from.index(), edge.to.index()))
-                .or_insert(0.0) += w;
+        if w > 0.0
+            && let (Some(s), Some(d)) = (node_of[edge.from.index()], node_of[edge.to.index()])
+        {
+            *map.entry((s, d)).or_insert(0.0) += w;
         }
     }
     sorted(map.into_iter().map(|((s, d), w)| (s, d, w)))

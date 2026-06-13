@@ -47,7 +47,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS results (
     name TEXT NOT NULL, version TEXT NOT NULL, downloads INTEGER,
     status TEXT NOT NULL, elapsed_sec REAL,
-    n_items INTEGER, n_modules INTEGER, n_module_nodes INTEGER,
+    n_items INTEGER, n_real_items INTEGER, n_modules INTEGER, n_module_nodes INTEGER,
     headline REAL, modularity_term REAL, divergence_term REAL,
     acyclicity_term REAL, encapsulation_term REAL,
     is_acyclic INTEGER, over_exposed_fraction REAL, mean_leak_cost REAL,
@@ -171,7 +171,8 @@ def anomalies(row):
 def row_from_json(j):
     c, enc, tan = j.get("composite", {}), j.get("encapsulation", {}), j.get("tangles", {})
     return {
-        "n_items": j.get("n_items"), "n_modules": j.get("n_modules"),
+        "n_items": j.get("n_items"), "n_real_items": j.get("n_real_items"),
+        "n_modules": j.get("n_modules"),
         "n_module_nodes": j.get("n_module_nodes"),
         "headline": c.get("headline"), "modularity_term": c.get("modularity_term"),
         "divergence_term": c.get("divergence_term"), "acyclicity_term": c.get("acyclicity_term"),
@@ -185,7 +186,7 @@ def process(name, version, downloads, dirs, binary, build_jobs, timeout, slot):
     row = {
         "name": name, "version": version, "downloads": downloads,
         "status": None, "elapsed_sec": None, "anomaly": None, "error": None, "ts": time.time(),
-        "n_items": None, "n_modules": None, "n_module_nodes": None, "headline": None,
+        "n_items": None, "n_real_items": None, "n_modules": None, "n_module_nodes": None, "headline": None,
         "modularity_term": None, "divergence_term": None, "acyclicity_term": None,
         "encapsulation_term": None, "is_acyclic": None, "over_exposed_fraction": None, "mean_leak_cost": None,
     }
