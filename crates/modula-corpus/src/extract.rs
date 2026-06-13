@@ -202,6 +202,17 @@ fn process(
         n_items: None,
         n_modules: None,
         n_edges: None,
+        n_import_edges: None,
+        n_signature_edges: None,
+        n_trait_bound_edges: None,
+        n_impl_edges: None,
+        n_body_edges: None,
+        n_structs: None,
+        n_enums: None,
+        n_traits: None,
+        n_type_aliases: None,
+        n_functions: None,
+        n_pub_api_items: None,
         elapsed_sec: None,
         prepare_sec: None,
         peak_rss_kb: None,
@@ -271,6 +282,17 @@ fn process(
                     row.n_edges = Some(summary.n_edges);
                     row.ra_version = summary.ra_version;
                     row.schema_version = summary.schema_version;
+                    row.n_import_edges = Some(summary.n_import_edges);
+                    row.n_signature_edges = Some(summary.n_signature_edges);
+                    row.n_trait_bound_edges = Some(summary.n_trait_bound_edges);
+                    row.n_impl_edges = Some(summary.n_impl_edges);
+                    row.n_body_edges = Some(summary.n_body_edges);
+                    row.n_structs = Some(summary.n_structs);
+                    row.n_enums = Some(summary.n_enums);
+                    row.n_traits = Some(summary.n_traits);
+                    row.n_type_aliases = Some(summary.n_type_aliases);
+                    row.n_functions = Some(summary.n_functions);
+                    row.n_pub_api_items = Some(summary.n_pub_api_items);
                 }
             }
             None => {
@@ -414,23 +436,57 @@ fn read_peak_rss_kb(pid: i32) -> Option<u64> {
     line.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// A lightweight summary of a serialized `CrateGraph`: node/edge counts plus the
-/// provenance fields, read without fully modelling the IR.
+/// A lightweight summary of a serialized `CrateGraph`: node/edge counts, the
+/// edge-kind and item-kind composition, the public-API item count, and the
+/// provenance fields, all read without fully modelling the IR.
 struct IrSummary {
     n_items: i32,
     n_modules: i32,
     n_edges: i32,
     ra_version: Option<String>,
     schema_version: Option<i32>,
+    n_import_edges: i32,
+    n_signature_edges: i32,
+    n_trait_bound_edges: i32,
+    n_impl_edges: i32,
+    n_body_edges: i32,
+    n_structs: i32,
+    n_enums: i32,
+    n_traits: i32,
+    n_type_aliases: i32,
+    n_functions: i32,
+    n_pub_api_items: i32,
 }
 
 fn ir_summary(ir_json: &[u8]) -> Option<IrSummary> {
     let v: serde_json::Value = serde_json::from_slice(ir_json).ok()?;
-    let len = |k: &str| v.get(k)?.as_array().map(|a| a.len() as i32);
+    let items = v.get("items")?.as_array()?;
+    let edges = v.get("edges")?.as_array()?;
+    let modules = v.get("modules")?.as_array()?;
+
+    // Tally edge kinds and item kinds by their serde tag.
+    let tag = |val: &serde_json::Value| val.get("kind").and_then(|x| x.as_str()).map(str::to_owned);
+    let edge_kind = |k: &str| {
+        edges
+            .iter()
+            .filter(|e| tag(e).as_deref() == Some(k))
+            .count() as i32
+    };
+    let item_kind = |k: &str| {
+        items
+            .iter()
+            .filter(|i| tag(i).as_deref() == Some(k))
+            .count() as i32
+    };
+    let n_pub_api_items = items
+        .iter()
+        .filter(|i| i.get("reachable_pub_api").and_then(|x| x.as_bool()) == Some(true))
+        .count() as i32;
+
     Some(IrSummary {
-        n_items: len("items")?,
-        n_modules: len("modules")?,
-        n_edges: len("edges")?,
+        n_items: items.len() as i32,
+        n_modules: modules.len() as i32,
+        n_edges: edges.len() as i32,
         ra_version: v
             .get("ra_version")
             .and_then(|x| x.as_str())
@@ -440,6 +496,17 @@ fn ir_summary(ir_json: &[u8]) -> Option<IrSummary> {
             .get("schema_version")
             .and_then(|x| x.as_i64())
             .map(|x| x as i32),
+        n_import_edges: edge_kind("Import"),
+        n_signature_edges: edge_kind("Signature"),
+        n_trait_bound_edges: edge_kind("TraitBound"),
+        n_impl_edges: edge_kind("Impl"),
+        n_body_edges: edge_kind("Body"),
+        n_structs: item_kind("Struct"),
+        n_enums: item_kind("Enum"),
+        n_traits: item_kind("Trait"),
+        n_type_aliases: item_kind("TypeAlias"),
+        n_functions: item_kind("Function"),
+        n_pub_api_items,
     })
 }
 
@@ -494,6 +561,41 @@ mod tests {
         assert_eq!((s.n_items, s.n_modules, s.n_edges), (3, 1, 0));
         assert_eq!(s.ra_version.as_deref(), Some("0.0.336"));
         assert_eq!(s.schema_version, Some(2));
+    }
+
+    #[test]
+    fn ir_summary_tallies_edge_and_item_composition() {
+        let json = br#"{
+            "items":[{"kind":"Struct","reachable_pub_api":true},
+                     {"kind":"Trait","reachable_pub_api":false},
+                     {"kind":"Function","reachable_pub_api":true},
+                     {"kind":"TypeAlias","reachable_pub_api":false}],
+            "modules":[{}],
+            "edges":[{"kind":"Body"},{"kind":"Body"},{"kind":"Signature"},
+                     {"kind":"Impl"},{"kind":"Import"}]
+        }"#;
+        let s = ir_summary(json).expect("valid IR");
+        assert_eq!(
+            (
+                s.n_structs,
+                s.n_enums,
+                s.n_traits,
+                s.n_type_aliases,
+                s.n_functions
+            ),
+            (1, 0, 1, 1, 1)
+        );
+        assert_eq!(
+            (
+                s.n_body_edges,
+                s.n_signature_edges,
+                s.n_import_edges,
+                s.n_impl_edges,
+                s.n_trait_bound_edges
+            ),
+            (2, 1, 1, 1, 0)
+        );
+        assert_eq!(s.n_pub_api_items, 2);
     }
 
     #[test]

@@ -9,6 +9,20 @@ CREATE TABLE extractions (
     n_items      INTEGER,
     n_modules    INTEGER,
     n_edges      INTEGER,
+    -- Edge-kind composition (the structural fingerprint the weights act on) and
+    -- item-kind composition, tallied from the IR. `n_pub_api_items` is the count
+    -- of items reachable through an unbroken pub chain from the crate root.
+    n_import_edges      INTEGER,
+    n_signature_edges   INTEGER,
+    n_trait_bound_edges INTEGER,
+    n_impl_edges        INTEGER,
+    n_body_edges        INTEGER,
+    n_structs           INTEGER,
+    n_enums             INTEGER,
+    n_traits            INTEGER,
+    n_type_aliases      INTEGER,
+    n_functions         INTEGER,
+    n_pub_api_items     INTEGER,
     -- Resource cost of extraction. `elapsed_sec` is the extractor subprocess
     -- wall time; `prepare_sec` is the preceding download + unpack; `peak_rss_kb`
     -- is the peak resident memory of the extractor process (the rust-analyzer
@@ -50,6 +64,23 @@ CREATE TABLE analyses (
     mean_leak_cost          DOUBLE,
     n_real_items            INTEGER,
     n_module_nodes          INTEGER,
+    -- Cycle severity (beyond the is_acyclic boolean): number of non-trivial
+    -- SCCs, size of the largest, total module nodes in any cycle, and whether
+    -- circuit enumeration was truncated (acyclicity then under-counts).
+    n_sccs                  INTEGER,
+    largest_scc             INTEGER,
+    modules_in_cycles       INTEGER,
+    circuits_truncated      INTEGER,           -- 0 | 1
+    -- Encapsulation tails beyond the means: worst single leak cost, count of
+    -- over-exposed items, and number of cross-module dependency edges.
+    max_leak_cost           DOUBLE,
+    n_over_exposed          INTEGER,
+    n_cross_module_edges    INTEGER,
+    -- Martin package metrics, aggregated over real modules.
+    mean_instability             DOUBLE,
+    median_instability           DOUBLE,
+    mean_cohesion                DOUBLE,
+    mean_distance_main_sequence  DOUBLE,
     anomaly                 TEXT,              -- comma-separated out-of-range / non-finite flags
     elapsed_ms              DOUBLE,
     error                   TEXT,

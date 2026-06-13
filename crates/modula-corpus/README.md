@@ -43,4 +43,14 @@ per crate per sweep). The schema is defined by diesel migrations under
   file;
 - **crates.io metadata**: `categories` (the standardized taxonomy) and `keywords`
   (free-form tags) from the db-dump, comma-joined, so a later embedding step
-  (z-scored metric features -> PCA -> t-SNE) can be colored by category or keyword.
+  (z-scored metric features -> PCA -> t-SNE) can be colored by category or keyword;
+- **structural composition**: edge-kind counts (import/signature/trait_bound/impl/
+  body), type/item-kind counts (struct/enum/trait/type_alias/function), and the
+  public-API item count.
+
+The `sweep` phase records, beyond the four headline terms: **cycle severity**
+(`n_sccs`, `largest_scc`, `modules_in_cycles`, `circuits_truncated`),
+**encapsulation tails** (`max_leak_cost`, `n_over_exposed`, `n_cross_module_edges`),
+and the **Martin package metrics** aggregated over real modules (`mean_instability`,
+`median_instability`, `mean_cohesion`, `mean_distance_main_sequence`). These give
+the embedding a far richer per-crate feature vector than the headline alone.

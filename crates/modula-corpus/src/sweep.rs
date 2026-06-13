@@ -110,7 +110,44 @@ fn fill(row: &mut Analysis, a: &AnalysisResult) {
     row.mean_leak_cost = Some(a.encapsulation.mean_leak_cost);
     row.n_real_items = Some(a.n_real_items as i32);
     row.n_module_nodes = Some(a.n_module_nodes as i32);
+
+    // Cycle severity, beyond the is_acyclic boolean.
+    let t = &a.tangles;
+    row.n_sccs = Some(t.sccs.len() as i32);
+    row.largest_scc = Some(t.largest_scc as i32);
+    row.modules_in_cycles = Some(t.sccs.iter().map(Vec::len).sum::<usize>() as i32);
+    row.circuits_truncated = Some(i32::from(t.circuits_truncated));
+
+    // Encapsulation tails. `deepest_leaks` is one entry per cross-module edge,
+    // ranked by descending cost, so its head is the worst leak.
+    let enc = &a.encapsulation;
+    row.max_leak_cost = enc.deepest_leaks.first().map(|l| l.leak_cost);
+    row.n_over_exposed = Some(enc.over_exposed.len() as i32);
+    row.n_cross_module_edges = Some(enc.deepest_leaks.len() as i32);
+
+    // Martin package metrics, aggregated over real modules.
+    row.mean_instability = mean_opt(a.modules.iter().map(|m| m.instability));
+    row.median_instability = median_opt(a.modules.iter().map(|m| m.instability));
+    row.mean_cohesion = mean_opt(a.modules.iter().map(|m| m.cohesion));
+    row.mean_distance_main_sequence = mean_opt(a.modules.iter().map(|m| m.distance_main_sequence));
+
     row.anomaly = anomalies(row);
+}
+
+/// Mean of the present values, or `None` when there are none.
+fn mean_opt(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+    let xs: Vec<f64> = values.flatten().collect();
+    (!xs.is_empty()).then(|| xs.iter().sum::<f64>() / xs.len() as f64)
+}
+
+/// Median of the present values, or `None` when there are none.
+fn median_opt(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+    let mut xs: Vec<f64> = values.flatten().collect();
+    if xs.is_empty() {
+        return None;
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(xs[xs.len() / 2])
 }
 
 /// Flags non-finite or out-of-`[0,1]` metric terms (the calibration bug hunt).
@@ -154,6 +191,17 @@ fn blank(e: &Extraction) -> Analysis {
         mean_leak_cost: None,
         n_real_items: None,
         n_module_nodes: None,
+        n_sccs: None,
+        largest_scc: None,
+        modules_in_cycles: None,
+        circuits_truncated: None,
+        max_leak_cost: None,
+        n_over_exposed: None,
+        n_cross_module_edges: None,
+        mean_instability: None,
+        median_instability: None,
+        mean_cohesion: None,
+        mean_distance_main_sequence: None,
         anomaly: None,
         elapsed_ms: None,
         error: None,
@@ -184,6 +232,17 @@ mod tests {
             mean_leak_cost: None,
             n_real_items: None,
             n_module_nodes: None,
+            n_sccs: None,
+            largest_scc: None,
+            modules_in_cycles: None,
+            circuits_truncated: None,
+            max_leak_cost: None,
+            n_over_exposed: None,
+            n_cross_module_edges: None,
+            mean_instability: None,
+            median_instability: None,
+            mean_cohesion: None,
+            mean_distance_main_sequence: None,
             anomaly: None,
             elapsed_ms: None,
             error: None,
