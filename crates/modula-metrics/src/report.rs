@@ -358,6 +358,8 @@ mod tests {
             ca: 1,
             ce: 2,
             instability: Some(0.66),
+            abstractness: Some(0.5),
+            distance_main_sequence: Some(0.16),
         }];
         r.tangles.sccs = vec![vec![ModuleId(0), ModuleId(1)]];
         r.tangles.largest_scc = 2;

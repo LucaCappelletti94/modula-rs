@@ -1,6 +1,8 @@
 //! Per-module coupling and cohesion, including Robert Martin's package metrics.
 
-use modula_ir::{CrateGraph, ModuleId};
+use std::collections::HashMap;
+
+use modula_ir::{CrateGraph, ItemKind, ModuleId};
 use serde::Serialize;
 
 use crate::module_graph::ModuleAggregation;
@@ -27,9 +29,42 @@ pub struct ModuleCoupling {
     pub ce: usize,
     /// Instability `Ce / (Ca + Ce)`; `None` when the module is uncoupled.
     pub instability: Option<f64>,
+    /// Abstractness `A`: the fraction of the module's types that are abstract.
+    /// In Rust the abstract type is the `trait`; concrete types are
+    /// `struct`/`enum`/`union`. `None` when the module declares no types.
+    pub abstractness: Option<f64>,
+    /// Distance from Martin's main sequence, `D = |A + I - 1|`, in `[0, 1]`.
+    /// `0` is a healthy balance (abstract-and-stable or concrete-and-unstable);
+    /// `1` is a "zone of pain" / "zone of uselessness" corner. `None` when
+    /// either `A` (no types) or `I` (uncoupled) is undefined.
+    pub distance_main_sequence: Option<f64>,
 }
 
-/// Computes per-module coupling and cohesion from a module aggregation.
+/// Per real module, `(abstract type count, total type count)`. Types are
+/// `struct`/`enum`/`union`/`trait`; the trait is the abstract one. Items are
+/// rolled up through `real_module`, so per-type containers count toward their
+/// owning `mod`.
+fn type_composition(ir: &CrateGraph) -> HashMap<ModuleId, (u32, u32)> {
+    let mut comp: HashMap<ModuleId, (u32, u32)> = HashMap::new();
+    for item in &ir.items {
+        let (is_type, is_abstract) = match item.kind {
+            ItemKind::Trait => (true, true),
+            ItemKind::Struct | ItemKind::Enum | ItemKind::Union => (true, false),
+            _ => (false, false),
+        };
+        if is_type {
+            let entry = comp.entry(ir.real_module(item.owning_module)).or_default();
+            entry.1 += 1;
+            if is_abstract {
+                entry.0 += 1;
+            }
+        }
+    }
+    comp
+}
+
+/// Computes per-module coupling, cohesion, and Martin's package metrics
+/// (instability, abstractness, distance from the main sequence).
 #[must_use]
 pub fn module_coupling(ir: &CrateGraph, agg: &ModuleAggregation) -> Vec<ModuleCoupling> {
     let n = agg.len();
@@ -47,6 +82,8 @@ pub fn module_coupling(ir: &CrateGraph, agg: &ModuleAggregation) -> Vec<ModuleCo
         in_degree[dst] += 1;
     }
 
+    let composition = type_composition(ir);
+
     (0..n)
         .map(|i| {
             let intra = agg.intra[i];
@@ -54,6 +91,14 @@ pub fn module_coupling(ir: &CrateGraph, agg: &ModuleAggregation) -> Vec<ModuleCo
             let cohesion = (total > 0.0).then(|| intra / total);
             let (ca, ce) = (in_degree[i], out_degree[i]);
             let instability = (ca + ce > 0).then(|| ce as f64 / (ca + ce) as f64);
+            let abstractness = composition
+                .get(&agg.nodes[i])
+                .filter(|&&(_, types)| types > 0)
+                .map(|&(abstr, types)| f64::from(abstr) / f64::from(types));
+            let distance_main_sequence = match (abstractness, instability) {
+                (Some(a), Some(i)) => Some((a + i - 1.0).abs()),
+                _ => None,
+            };
             ModuleCoupling {
                 module: agg.nodes[i],
                 path: ir.module(agg.nodes[i]).canonical_path.clone(),
@@ -64,6 +109,8 @@ pub fn module_coupling(ir: &CrateGraph, agg: &ModuleAggregation) -> Vec<ModuleCo
                 ca,
                 ce,
                 instability,
+                abstractness,
+                distance_main_sequence,
             }
         })
         .collect()
@@ -74,7 +121,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use modula_ir::{
-        Crate, CrateGraph, CrateId, Module, ModuleId, ModuleKind, SCHEMA_VERSION, Visibility,
+        Crate, CrateGraph, CrateId, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+        SCHEMA_VERSION, Visibility,
     };
 
     use super::module_coupling;
@@ -134,5 +182,45 @@ mod tests {
         let node3 = &coupling[3];
         assert_eq!(node3.cohesion, None);
         assert_eq!(node3.instability, None);
+        // No items in this fixture, so abstractness and distance are undefined.
+        assert_eq!(node0.abstractness, None);
+        assert_eq!(node0.distance_main_sequence, None);
+    }
+
+    #[test]
+    fn abstractness_and_distance_from_main_sequence() {
+        // Module 0: a trait + a struct (A = 1/2). Module 1: a struct only (A = 0).
+        // The agg couples them both ways, so each has Ca = Ce = 1 -> I = 0.5.
+        // D(0) = |0.5 + 0.5 - 1| = 0 (on the main sequence);
+        // D(1) = |0.0 + 0.5 - 1| = 0.5 (concrete but as stable as it is unstable).
+        let mut ir = graph_with_modules(2);
+        let item = |id: u32, owner: u32, kind: ItemKind| Item {
+            id: ItemId(id),
+            canonical_path: format!("c::i{id}"),
+            kind,
+            visibility: Visibility::Public,
+            owning_module: ModuleId(owner),
+            crate_id: CrateId(0),
+            has_canonical_path: true,
+            reachable_pub_api: true,
+        };
+        ir.items = vec![
+            item(0, 0, ItemKind::Trait),
+            item(1, 0, ItemKind::Struct),
+            item(2, 1, ItemKind::Struct),
+        ];
+        let agg = ModuleAggregation {
+            nodes: vec![ModuleId(0), ModuleId(1)],
+            index_of: [(ModuleId(0), 0), (ModuleId(1), 1)].into_iter().collect(),
+            intra: vec![0.0, 0.0],
+            inter: [((0, 1), 1.0), ((1, 0), 1.0)].into_iter().collect(),
+        };
+        let coupling = module_coupling(&ir, &agg);
+
+        assert!((coupling[0].abstractness.unwrap() - 0.5).abs() < 1e-12);
+        assert!((coupling[0].instability.unwrap() - 0.5).abs() < 1e-12);
+        assert!(coupling[0].distance_main_sequence.unwrap() < 1e-12);
+        assert_eq!(coupling[1].abstractness, Some(0.0));
+        assert!((coupling[1].distance_main_sequence.unwrap() - 0.5).abs() < 1e-12);
     }
 }
