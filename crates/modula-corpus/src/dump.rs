@@ -1,10 +1,11 @@
 //! Parsing the crates.io database dump into a download-ranked work-list.
 //!
 //! The dump is a single `.tar.gz` of CSVs. We stream it once (the machine has
-//! ample RAM, so every needed column is held in memory) and join four tables:
-//! `crate_downloads` (download counts), `crates` (id -> name),
-//! `default_versions` (crate_id -> the version cargo would pick), and `versions`
-//! (version_id -> the version string).
+//! ample RAM, so every needed column is held in memory) and join: the version
+//! tables (`crate_downloads` for counts, `crates` for id -> name,
+//! `default_versions` + `versions` for the version cargo would pick) and the
+//! metadata tables (`categories` + `crates_categories` for the standardized
+//! taxonomy, `keywords` + `crates_keywords` for free-form tags).
 
 use std::collections::HashMap;
 use std::fs::File;

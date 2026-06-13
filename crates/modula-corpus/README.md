@@ -32,3 +32,8 @@ lives in a SQLite database (`--db`, default `corpus.db`) with two tables:
 `extractions` (one row per crate, written by `extract`) and `analyses` (one row
 per crate per sweep). The schema is defined by diesel migrations under
 `migrations/`.
+
+`extract` also captures each crate's crates.io `categories` (the standardized
+taxonomy) and `keywords` (free-form tags) from the db-dump, stored as
+comma-joined slugs on the `extractions` row, so a later embedding step (z-scored
+metric features -> PCA -> t-SNE) can be colored by category or keyword.
