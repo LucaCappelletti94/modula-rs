@@ -24,7 +24,12 @@ pub enum MultiplicityMode {
 /// crates; every downstream metric is invariant to the choice.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RefKindWeights {
-    /// Weight of a `use` import or re-export edge.
+    /// Weight of a `use` import or re-export edge. Defaults to `0.0`: an import
+    /// (especially a `pub use` re-export) is an API-surface/namespace
+    /// relationship, not implementation coupling. Real usage is already captured
+    /// by `Signature`/`Body`/`Impl`/`TraitBound` edges, so counting imports only
+    /// manufactures false module cycles (the re-export facade collapses a crate
+    /// into one SCC). See `notes/metric-calibration-roadmap.md`, Problem B.
     pub import: f64,
     /// Weight of a signature-type edge.
     pub signature: f64,
@@ -41,7 +46,7 @@ pub struct RefKindWeights {
 impl Default for RefKindWeights {
     fn default() -> Self {
         Self {
-            import: 1.0,
+            import: 0.0,
             signature: 3.0,
             trait_bound: 3.0,
             impl_block: 2.0,
