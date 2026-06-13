@@ -9,8 +9,21 @@ CREATE TABLE extractions (
     n_items      INTEGER,
     n_modules    INTEGER,
     n_edges      INTEGER,
+    -- Resource cost of extraction. `elapsed_sec` is the extractor subprocess
+    -- wall time; `prepare_sec` is the preceding download + unpack; `peak_rss_kb`
+    -- is the peak resident memory of the extractor process (the rust-analyzer
+    -- database dominates it), sampled from /proc; `crate_bytes` is the .crate
+    -- download size.
     elapsed_sec  DOUBLE,
+    prepare_sec  DOUBLE,
+    peak_rss_kb  BIGINT,
+    crate_bytes  BIGINT,
     error        TEXT,
+    -- Provenance: the rust-analyzer version and IR schema version that produced
+    -- the dump, so stale IR can be re-extracted after a toolchain/schema bump
+    -- without opening every file.
+    ra_version     TEXT,
+    schema_version INTEGER,
     -- Comma-joined crates.io metadata captured from the db-dump: `categories`
     -- is the curated/standardized taxonomy (slugs like `parsing`,
     -- `command-line-utilities`); `keywords` are free-form author tag slugs.

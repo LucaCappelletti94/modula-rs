@@ -18,7 +18,17 @@ pub struct Extraction {
     pub n_modules: Option<i32>,
     pub n_edges: Option<i32>,
     pub elapsed_sec: Option<f64>,
+    /// Download + unpack wall time preceding extraction.
+    pub prepare_sec: Option<f64>,
+    /// Peak resident memory of the extractor process, in KiB (from /proc).
+    pub peak_rss_kb: Option<i64>,
+    /// Size of the downloaded `.crate` tarball, in bytes.
+    pub crate_bytes: Option<i64>,
     pub error: Option<String>,
+    /// rust-analyzer version that produced the IR (from the IR file).
+    pub ra_version: Option<String>,
+    /// IR schema version that produced the IR (from the IR file).
+    pub schema_version: Option<i32>,
     /// Comma-joined crates.io category slugs (the standardized taxonomy).
     pub categories: Option<String>,
     /// Comma-joined crates.io keyword slugs (free-form author tags).

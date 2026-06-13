@@ -33,7 +33,14 @@ lives in a SQLite database (`--db`, default `corpus.db`) with two tables:
 per crate per sweep). The schema is defined by diesel migrations under
 `migrations/`.
 
-`extract` also captures each crate's crates.io `categories` (the standardized
-taxonomy) and `keywords` (free-form tags) from the db-dump, stored as
-comma-joined slugs on the `extractions` row, so a later embedding step (z-scored
-metric features -> PCA -> t-SNE) can be colored by category or keyword.
+`extract` also records, per crate:
+
+- **resource cost**: `elapsed_sec` (extraction), `prepare_sec` (download + unpack),
+  `peak_rss_kb` (peak RSS of the extractor process, sampled from `/proc`),
+  `crate_bytes` (download size);
+- **provenance**: `ra_version` and `schema_version` from the IR, so stale dumps
+  can be re-extracted after a rust-analyzer or schema bump without opening every
+  file;
+- **crates.io metadata**: `categories` (the standardized taxonomy) and `keywords`
+  (free-form tags) from the db-dump, comma-joined, so a later embedding step
+  (z-scored metric features -> PCA -> t-SNE) can be colored by category or keyword.

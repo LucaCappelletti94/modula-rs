@@ -13,7 +13,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
@@ -203,24 +203,32 @@ fn process(
         n_modules: None,
         n_edges: None,
         elapsed_sec: None,
+        prepare_sec: None,
+        peak_rss_kb: None,
+        crate_bytes: None,
         error: None,
+        ra_version: None,
+        schema_version: None,
         categories: non_empty(&item.categories),
         keywords: non_empty(&item.keywords),
         ts: now_secs(),
     };
 
-    let crate_dir = match download_and_unpack(item, slot, dirs, agent) {
-        Ok(dir) => dir,
+    let prepare_started = Instant::now();
+    let (crate_dir, crate_bytes) = match download_and_unpack(item, slot, dirs, agent) {
+        Ok(out) => out,
         Err(e) => {
             row.status = "download_fail".to_owned();
             row.error = Some(format!("{e:#}"));
             return row;
         }
     };
+    row.prepare_sec = Some(prepare_started.elapsed().as_secs_f64());
+    row.crate_bytes = Some(crate_bytes as i64);
 
     let target = dirs.targets.join(format!("slot{slot}"));
     let started = Instant::now();
-    let outcome = run_worker(
+    let (outcome, peak_rss_kb) = run_worker(
         exe,
         &crate_dir,
         &target,
@@ -229,6 +237,9 @@ fn process(
         timeout,
     );
     row.elapsed_sec = Some(started.elapsed().as_secs_f64());
+    if peak_rss_kb > 0 {
+        row.peak_rss_kb = Some(peak_rss_kb as i64);
+    }
     let _ = fs::remove_dir_all(dirs.work.join(format!("slot{slot}")));
 
     match outcome {
@@ -244,8 +255,8 @@ fn process(
             row.status = "extract_fail".to_owned();
             row.error = Some(msg);
         }
-        WorkerOutcome::Ok(ir_json) => match counts(&ir_json) {
-            Some((items, modules, edges)) => {
+        WorkerOutcome::Ok(ir_json) => match ir_summary(&ir_json) {
+            Some(summary) => {
                 let ir_path = dirs
                     .ir
                     .join(format!("{}-{}.ir.json", item.name, item.version));
@@ -255,9 +266,11 @@ fn process(
                 } else {
                     row.status = "ok".to_owned();
                     row.ir_path = Some(ir_path.to_string_lossy().into_owned());
-                    row.n_items = Some(items);
-                    row.n_modules = Some(modules);
-                    row.n_edges = Some(edges);
+                    row.n_items = Some(summary.n_items);
+                    row.n_modules = Some(summary.n_modules);
+                    row.n_edges = Some(summary.n_edges);
+                    row.ra_version = summary.ra_version;
+                    row.schema_version = summary.schema_version;
                 }
             }
             None => {
@@ -270,13 +283,13 @@ fn process(
 }
 
 /// Ensures the crate tarball is cached, then unpacks it, returning the crate
-/// source directory.
+/// source directory and the `.crate` tarball size in bytes.
 fn download_and_unpack(
     item: &CrateVersion,
     slot: usize,
     dirs: &Dirs,
     agent: &ureq::Agent,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, u64)> {
     let tarball = dirs
         .dl
         .join(format!("{}-{}.crate", item.name, item.version));
@@ -289,6 +302,7 @@ fn download_and_unpack(
         let bytes = http::get_bytes(agent, &url)?;
         fs::write(&tarball, &bytes).with_context(|| format!("writing {}", tarball.display()))?;
     }
+    let crate_bytes = fs::metadata(&tarball).map(|m| m.len()).unwrap_or(0);
     let work = dirs.work.join(format!("slot{slot}"));
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work)?;
@@ -296,7 +310,10 @@ fn download_and_unpack(
     Archive::new(GzDecoder::new(file))
         .unpack(&work)
         .with_context(|| format!("unpacking {}", tarball.display()))?;
-    Ok(work.join(format!("{}-{}", item.name, item.version)))
+    Ok((
+        work.join(format!("{}-{}", item.name, item.version)),
+        crate_bytes,
+    ))
 }
 
 /// The result of running the extraction subprocess.
@@ -308,7 +325,8 @@ enum WorkerOutcome {
 }
 
 /// Spawns `extract-one` as an isolated, group-led subprocess and waits with a
-/// hard timeout, killing the whole group on expiry.
+/// hard timeout, killing the whole group on expiry. Returns the outcome and the
+/// peak resident memory (KiB) of the extractor process, sampled while it runs.
 fn run_worker(
     exe: &Path,
     crate_dir: &Path,
@@ -316,7 +334,7 @@ fn run_worker(
     cargo_home: &Path,
     build_jobs: usize,
     timeout: Duration,
-) -> WorkerOutcome {
+) -> (WorkerOutcome, u64) {
     let mut cmd = Command::new(exe);
     cmd.arg("extract-one")
         .arg(crate_dir)
@@ -330,29 +348,37 @@ fn run_worker(
 
     let child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return WorkerOutcome::Spawn(e.to_string()),
+        Err(e) => return (WorkerOutcome::Spawn(e.to_string()), 0),
     };
     let pid = child.id() as i32;
 
     let killed = std::sync::Arc::new(AtomicBool::new(false));
     let finished = std::sync::Arc::new(AtomicBool::new(false));
+    let peak_rss_kb = std::sync::Arc::new(AtomicU64::new(0));
+    // The watchdog both enforces the timeout (group SIGKILL) and samples peak
+    // resident memory from /proc while the extractor runs.
     let watchdog = {
-        let (killed, finished) = (killed.clone(), finished.clone());
+        let (killed, finished, peak) = (killed.clone(), finished.clone(), peak_rss_kb.clone());
         std::thread::spawn(move || {
             let deadline = Instant::now() + timeout;
-            while Instant::now() < deadline {
+            loop {
+                if let Some(kb) = read_peak_rss_kb(pid) {
+                    peak.fetch_max(kb, Ordering::Relaxed);
+                }
                 if finished.load(Ordering::Acquire) {
                     return;
                 }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            if !finished.load(Ordering::Acquire) {
-                killed.store(true, Ordering::Release);
-                // SAFETY: sending SIGKILL to the child's process group. `-pid`
-                // targets the group led by the child (process_group(0) above).
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
+                if Instant::now() >= deadline {
+                    killed.store(true, Ordering::Release);
+                    // SAFETY: sending SIGKILL to the child's process group.
+                    // `-pid` targets the group led by the child
+                    // (process_group(0) above).
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                    return;
                 }
+                std::thread::sleep(Duration::from_millis(100));
             }
         })
     };
@@ -360,11 +386,12 @@ fn run_worker(
     let output = child.wait_with_output();
     finished.store(true, Ordering::Release);
     let _ = watchdog.join();
+    let peak = peak_rss_kb.load(Ordering::Relaxed);
 
     if killed.load(Ordering::Acquire) {
-        return WorkerOutcome::Timeout;
+        return (WorkerOutcome::Timeout, peak);
     }
-    match output {
+    let outcome = match output {
         Ok(out) if out.status.success() => WorkerOutcome::Ok(out.stdout),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -375,15 +402,45 @@ fn run_worker(
             )
         }
         Err(e) => WorkerOutcome::Spawn(e.to_string()),
-    }
+    };
+    (outcome, peak)
 }
 
-/// Counts `(items, modules, edges)` in a serialized `CrateGraph` without fully
-/// modelling it.
-fn counts(ir_json: &[u8]) -> Option<(i32, i32, i32)> {
+/// Reads a process's peak resident set size (`VmHWM`) from `/proc/<pid>/status`,
+/// in KiB. `None` once the process has exited (its `/proc` entry is gone).
+fn read_peak_rss_kb(pid: i32) -> Option<u64> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmHWM:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// A lightweight summary of a serialized `CrateGraph`: node/edge counts plus the
+/// provenance fields, read without fully modelling the IR.
+struct IrSummary {
+    n_items: i32,
+    n_modules: i32,
+    n_edges: i32,
+    ra_version: Option<String>,
+    schema_version: Option<i32>,
+}
+
+fn ir_summary(ir_json: &[u8]) -> Option<IrSummary> {
     let v: serde_json::Value = serde_json::from_slice(ir_json).ok()?;
     let len = |k: &str| v.get(k)?.as_array().map(|a| a.len() as i32);
-    Some((len("items")?, len("modules")?, len("edges")?))
+    Some(IrSummary {
+        n_items: len("items")?,
+        n_modules: len("modules")?,
+        n_edges: len("edges")?,
+        ra_version: v
+            .get("ra_version")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+        schema_version: v
+            .get("schema_version")
+            .and_then(|x| x.as_i64())
+            .map(|x| x as i32),
+    })
 }
 
 /// Downloads the db-dump if it is not already present.
@@ -427,19 +484,32 @@ fn non_empty(s: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::counts;
+    use super::ir_summary;
 
     #[test]
-    fn counts_reads_array_lengths() {
-        let json = br#"{"items":[1,2,3],"modules":[1],"edges":[],"extra":9}"#;
-        assert_eq!(counts(json), Some((3, 1, 0)));
+    fn ir_summary_reads_counts_and_provenance() {
+        let json = br#"{"items":[1,2,3],"modules":[1],"edges":[],
+            "ra_version":"0.0.336","schema_version":2,"extra":9}"#;
+        let s = ir_summary(json).expect("valid IR");
+        assert_eq!((s.n_items, s.n_modules, s.n_edges), (3, 1, 0));
+        assert_eq!(s.ra_version.as_deref(), Some("0.0.336"));
+        assert_eq!(s.schema_version, Some(2));
     }
 
     #[test]
-    fn counts_rejects_malformed_or_incomplete_ir() {
-        assert_eq!(counts(b"{}"), None);
-        assert_eq!(counts(b"not json"), None);
+    fn ir_summary_tolerates_missing_provenance() {
+        let s = ir_summary(br#"{"items":[],"modules":[],"edges":[],"ra_version":""}"#)
+            .expect("valid IR");
+        assert_eq!((s.n_items, s.n_modules, s.n_edges), (0, 0, 0));
+        assert_eq!(s.ra_version, None); // empty string normalized to None
+        assert_eq!(s.schema_version, None);
+    }
+
+    #[test]
+    fn ir_summary_rejects_malformed_or_incomplete_ir() {
+        assert!(ir_summary(b"{}").is_none());
+        assert!(ir_summary(b"not json").is_none());
         // Missing the `edges` array.
-        assert_eq!(counts(br#"{"items":[],"modules":[]}"#), None);
+        assert!(ir_summary(br#"{"items":[],"modules":[]}"#).is_none());
     }
 }
