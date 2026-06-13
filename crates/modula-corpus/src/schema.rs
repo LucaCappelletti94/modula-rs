@@ -53,7 +53,7 @@ diesel::table! {
         n_sccs -> Nullable<Integer>,
         largest_scc -> Nullable<Integer>,
         modules_in_cycles -> Nullable<Integer>,
-        circuits_truncated -> Nullable<Integer>,
+        cyclomatic_number -> Nullable<Integer>,
         max_leak_cost -> Nullable<Double>,
         n_over_exposed -> Nullable<Integer>,
         n_cross_module_edges -> Nullable<Integer>,

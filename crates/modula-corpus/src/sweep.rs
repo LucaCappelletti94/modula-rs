@@ -116,7 +116,7 @@ fn fill(row: &mut Analysis, a: &AnalysisResult) {
     row.n_sccs = Some(t.sccs.len() as i32);
     row.largest_scc = Some(t.largest_scc as i32);
     row.modules_in_cycles = Some(t.sccs.iter().map(Vec::len).sum::<usize>() as i32);
-    row.circuits_truncated = Some(i32::from(t.circuits_truncated));
+    row.cyclomatic_number = Some(t.cyclomatic_number as i32);
 
     // Encapsulation tails. `deepest_leaks` is one entry per cross-module edge,
     // ranked by descending cost, so its head is the worst leak.
@@ -194,7 +194,7 @@ fn blank(e: &Extraction) -> Analysis {
         n_sccs: None,
         largest_scc: None,
         modules_in_cycles: None,
-        circuits_truncated: None,
+        cyclomatic_number: None,
         max_leak_cost: None,
         n_over_exposed: None,
         n_cross_module_edges: None,
@@ -235,7 +235,7 @@ mod tests {
             n_sccs: None,
             largest_scc: None,
             modules_in_cycles: None,
-            circuits_truncated: None,
+            cyclomatic_number: None,
             max_leak_cost: None,
             n_over_exposed: None,
             n_cross_module_edges: None,

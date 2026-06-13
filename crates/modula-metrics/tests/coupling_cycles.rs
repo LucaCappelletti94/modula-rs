@@ -4,7 +4,7 @@ mod common;
 
 use common::{two_cliques_edges, two_module_graph};
 use modula_metrics::coupling::{ModuleCoupling, module_coupling};
-use modula_metrics::cycles::{CyclesConfig, tangles};
+use modula_metrics::cycles::tangles;
 use modula_metrics::module_graph::ModuleAggregation;
 use modula_metrics::weighting::RefKindWeights;
 
@@ -47,11 +47,11 @@ fn coupling_captures_direction_and_instability() {
 fn clean_module_graph_is_acyclic() {
     let ir = clean();
     let agg = ModuleAggregation::build(&ir, &RefKindWeights::default());
-    let report = tangles(&agg, &CyclesConfig::default()).unwrap();
+    let report = tangles(&agg).unwrap();
     assert!(report.is_acyclic);
     assert_eq!(report.largest_scc, 0);
     assert!(report.sccs.is_empty());
-    assert!(!report.circuits_truncated);
+    assert_eq!(report.cyclomatic_number, 0);
 }
 
 #[test]
@@ -62,12 +62,12 @@ fn mutual_dependency_is_a_tangle() {
     edges.push((4, 3));
     let ir = two_module_graph(8, &[0, 0, 0, 0, 1, 1, 1, 1], &edges);
     let agg = ModuleAggregation::build(&ir, &RefKindWeights::default());
-    let report = tangles(&agg, &CyclesConfig::default()).unwrap();
+    let report = tangles(&agg).unwrap();
 
     assert!(!report.is_acyclic);
     assert_eq!(report.largest_scc, 2);
     assert_eq!(report.sccs.len(), 1);
     assert_eq!(report.sccs[0].len(), 2);
-    // At least one elementary circuit (a -> b -> a) is reported.
-    assert!(!report.circuits.is_empty());
+    // The mutual a <-> b dependency is exactly one independent cycle.
+    assert_eq!(report.cyclomatic_number, 1);
 }

@@ -231,10 +231,9 @@ mod unit_tests {
     fn acyclicity_is_fraction_of_nodes_outside_cycles() {
         let tangles = TangleReport {
             sccs: vec![vec![ModuleId(0), ModuleId(1)]],
-            circuits: Vec::new(),
             is_acyclic: false,
             largest_scc: 2,
-            circuits_truncated: false,
+            cyclomatic_number: 1,
         };
         // 2 of 4 nodes in cycles -> 1 - 2/4 = 0.5.
         assert!((acyclicity(&tangles, 4) - 0.5).abs() < 1e-12);

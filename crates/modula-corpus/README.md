@@ -49,7 +49,7 @@ per crate per sweep). The schema is defined by diesel migrations under
   public-API item count.
 
 The `sweep` phase records, beyond the four headline terms: **cycle severity**
-(`n_sccs`, `largest_scc`, `modules_in_cycles`, `circuits_truncated`),
+(`n_sccs`, `largest_scc`, `modules_in_cycles`, `cyclomatic_number`),
 **encapsulation tails** (`max_leak_cost`, `n_over_exposed`, `n_cross_module_edges`),
 and the **Martin package metrics** aggregated over real modules (`mean_instability`,
 `median_instability`, `mean_cohesion`, `mean_distance_main_sequence`). These give

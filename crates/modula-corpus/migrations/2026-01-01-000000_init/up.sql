@@ -65,12 +65,13 @@ CREATE TABLE analyses (
     n_real_items            INTEGER,
     n_module_nodes          INTEGER,
     -- Cycle severity (beyond the is_acyclic boolean): number of non-trivial
-    -- SCCs, size of the largest, total module nodes in any cycle, and whether
-    -- circuit enumeration was truncated (acyclicity then under-counts).
+    -- SCCs, size of the largest, total module nodes in any cycle, and the
+    -- cyclomatic number (independent cycles = E - V + 1 per SCC) measuring how
+    -- densely interwoven the tangles are.
     n_sccs                  INTEGER,
     largest_scc             INTEGER,
     modules_in_cycles       INTEGER,
-    circuits_truncated      INTEGER,           -- 0 | 1
+    cyclomatic_number       INTEGER,
     -- Encapsulation tails beyond the means: worst single leak cost, count of
     -- over-exposed items, and number of cross-module dependency edges.
     max_leak_cost           DOUBLE,

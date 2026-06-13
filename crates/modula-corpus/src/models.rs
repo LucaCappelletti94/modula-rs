@@ -69,7 +69,7 @@ pub struct Analysis {
     pub n_sccs: Option<i32>,
     pub largest_scc: Option<i32>,
     pub modules_in_cycles: Option<i32>,
-    pub circuits_truncated: Option<i32>,
+    pub cyclomatic_number: Option<i32>,
     pub max_leak_cost: Option<f64>,
     pub n_over_exposed: Option<i32>,
     pub n_cross_module_edges: Option<i32>,

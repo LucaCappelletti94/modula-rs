@@ -5,7 +5,7 @@ use modula_ir::CrateGraph;
 use serde::Serialize;
 
 use crate::coupling::{ModuleCoupling, module_coupling};
-use crate::cycles::{CyclesConfig, TangleReport, tangles};
+use crate::cycles::{TangleReport, tangles};
 use crate::encapsulation::{EncapsulationReport, encapsulation};
 use crate::graph::build_item_graphs;
 use crate::modularity::{DepthRecord, DivergenceRecord, ModularityConfig, profiles};
@@ -20,8 +20,6 @@ pub struct AnalysisConfig {
     pub weights: RefKindWeights,
     /// Modularity / detector configuration.
     pub modularity: ModularityConfig,
-    /// Cycle-detection configuration.
-    pub cycles: CyclesConfig,
     /// Composite-score weights.
     pub composite: CompositeWeights,
 }
@@ -89,7 +87,7 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
     let agg = ModuleAggregation::build(ir, &config.weights);
     let n_module_nodes = agg.len();
     let modules = module_coupling(ir, &agg);
-    let tangles = tangles(&agg, &config.cycles)?;
+    let tangles = tangles(&agg)?;
     let encapsulation = encapsulation(ir)?;
 
     // Modularity and divergence need the item graphs; a crate with no real

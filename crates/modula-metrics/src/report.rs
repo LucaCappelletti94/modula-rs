@@ -147,9 +147,10 @@ pub fn to_human(result: &AnalysisResult) -> String {
     } else {
         let _ = writeln!(
             s,
-            "Cycles: {} tangle(s), largest {} modules",
+            "Cycles: {} tangle(s), largest {} modules, {} independent cycle(s)",
             result.tangles.sccs.len(),
-            result.tangles.largest_scc
+            result.tangles.largest_scc,
+            result.tangles.cyclomatic_number
         );
         for scc in result.tangles.sccs.iter().take(5) {
             let names: Vec<&str> = scc
@@ -260,10 +261,9 @@ mod tests {
             modules: Vec::new(),
             tangles: TangleReport {
                 sccs: vec![vec![ModuleId(0)]; sccs],
-                circuits: Vec::new(),
                 is_acyclic,
                 largest_scc: usize::from(sccs != 0),
-                circuits_truncated: false,
+                cyclomatic_number: sccs,
             },
             encapsulation: EncapsulationReport {
                 over_exposed: Vec::new(),
