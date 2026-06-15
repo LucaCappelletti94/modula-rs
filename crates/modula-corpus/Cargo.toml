@@ -52,3 +52,5 @@ plotters = { version = "0.3", default-features = false, features = ["svg_backend
 
 # Process-group timeout kill for the extract workers (Linux).
 libc = "0.2"
+nalgebra = "0.33"
+bhtsne = "0.5.10"

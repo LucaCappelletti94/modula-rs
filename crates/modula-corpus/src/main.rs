@@ -17,6 +17,7 @@ use clap::{Parser, Subcommand};
 
 mod db;
 mod dump;
+mod embed;
 mod extract;
 mod http;
 mod models;
@@ -72,6 +73,25 @@ enum Command {
         #[arg(long, default_value = "plots/metrics.svg")]
         out: PathBuf,
     },
+    /// Project crate metric features to 2D (PCA + t-SNE), colored by category.
+    Embed {
+        #[arg(long, default_value = DEFAULT_ROOT)]
+        root: PathBuf,
+        #[arg(long, default_value = "corpus.db")]
+        db: String,
+        #[arg(
+            long,
+            default_value = "plots/embed",
+            help = "output prefix; -pca.svg / -tsne.svg appended"
+        )]
+        out: PathBuf,
+        #[arg(long, default_value = "category", help = "category | keyword")]
+        color_by: String,
+        #[arg(long, default_value_t = 30.0)]
+        perplexity: f64,
+        #[arg(long, default_value_t = 0, help = "cap on points (0 = all)")]
+        max_points: usize,
+    },
     /// Internal worker: extract one already-unpacked crate, print IR to stdout.
     #[command(hide = true)]
     ExtractOne { dir: PathBuf },
@@ -111,6 +131,31 @@ fn main() -> Result<()> {
                 root,
                 db_path: db,
                 out,
+            })
+        }
+        Command::Embed {
+            root,
+            db,
+            out,
+            color_by,
+            perplexity,
+            max_points,
+        } => {
+            let out = if out.is_absolute() {
+                out
+            } else {
+                root.join(out)
+            };
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            embed::run(&embed::EmbedArgs {
+                root,
+                db_path: db,
+                out,
+                color_by,
+                perplexity,
+                max_points,
             })
         }
         Command::ExtractOne { dir } => extract::extract_one(&dir),
