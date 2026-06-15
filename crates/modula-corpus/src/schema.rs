@@ -31,6 +31,7 @@ diesel::table! {
         categories -> Nullable<Text>,
         keywords -> Nullable<Text>,
         ts -> BigInt,
+        released_at -> Nullable<BigInt>,
     }
 }
 
@@ -54,7 +55,6 @@ diesel::table! {
         largest_scc -> Nullable<Integer>,
         modules_in_cycles -> Nullable<Integer>,
         cyclomatic_number -> Nullable<Integer>,
-        max_leak_cost -> Nullable<Double>,
         n_over_exposed -> Nullable<Integer>,
         n_cross_module_edges -> Nullable<Integer>,
         mean_instability -> Nullable<Double>,

@@ -113,12 +113,12 @@ fn fill(row: &mut Analysis, a: &AnalysisResult) {
     row.modules_in_cycles = Some(t.sccs.iter().map(Vec::len).sum::<usize>() as i32);
     row.cyclomatic_number = Some(t.cyclomatic_number as i32);
 
-    // Encapsulation tails. `deepest_leaks` is one entry per cross-module edge,
-    // ranked by descending cost, so its head is the worst leak.
+    // Encapsulation counts. `leaks` are the cross-module references that reach
+    // into another module's internals (target not public API); `mean_leak_cost`
+    // is their fraction over all cross-module references (the leak rate).
     let enc = &a.encapsulation;
-    row.max_leak_cost = enc.deepest_leaks.first().map(|l| l.leak_cost);
     row.n_over_exposed = Some(enc.over_exposed.len() as i32);
-    row.n_cross_module_edges = Some(enc.deepest_leaks.len() as i32);
+    row.n_cross_module_edges = Some(enc.n_cross_module_refs as i32);
 
     // Martin package metrics, aggregated over real modules.
     row.mean_instability = mean_opt(a.modules.iter().map(|m| m.instability));
@@ -146,7 +146,6 @@ fn median_opt(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
 }
 
 /// Flags non-finite or out-of-`[0,1]` metric terms (the calibration bug hunt).
-/// `mean_leak_cost` is exempt from the range check (it is a mean of costs).
 fn anomalies(row: &Analysis) -> Option<String> {
     let terms: [(&str, Option<f64>); 7] = [
         ("headline", row.headline),
@@ -162,7 +161,7 @@ fn anomalies(row: &Analysis) -> Option<String> {
         let Some(v) = value else { continue };
         if !v.is_finite() {
             flags.push(format!("{name}=nonfinite"));
-        } else if name != "mean_leak_cost" && !(-1e-9..=1.0 + 1e-9).contains(&v) {
+        } else if !(-1e-9..=1.0 + 1e-9).contains(&v) {
             flags.push(format!("{name}={v:.3}_oob"));
         }
     }
@@ -190,7 +189,6 @@ fn blank(e: &Extraction) -> Analysis {
         largest_scc: None,
         modules_in_cycles: None,
         cyclomatic_number: None,
-        max_leak_cost: None,
         n_over_exposed: None,
         n_cross_module_edges: None,
         mean_instability: None,
@@ -231,7 +229,6 @@ mod tests {
             largest_scc: None,
             modules_in_cycles: None,
             cyclomatic_number: None,
-            max_leak_cost: None,
             n_over_exposed: None,
             n_cross_module_edges: None,
             mean_instability: None,
@@ -266,13 +263,17 @@ mod tests {
     }
 
     #[test]
-    fn mean_leak_cost_is_exempt_from_the_range_check() {
+    fn mean_leak_cost_is_range_checked_as_a_rate() {
+        // mean_leak_cost is now the leak rate (1 - MII), a fraction in [0,1], so
+        // it is range-checked like every other term.
         let mut r = row();
-        r.mean_leak_cost = Some(2.0); // a mean of costs, not a [0,1] ratio
-        assert_eq!(anomalies(&r), None);
-        // ...but non-finite is still flagged.
+        r.mean_leak_cost = Some(2.0);
+        assert_eq!(anomalies(&r).as_deref(), Some("mean_leak_cost=2.000_oob"));
         r.mean_leak_cost = Some(f64::INFINITY);
         assert_eq!(anomalies(&r).as_deref(), Some("mean_leak_cost=nonfinite"));
+        // A legitimate rate is clean.
+        r.mean_leak_cost = Some(0.5);
+        assert_eq!(anomalies(&r), None);
     }
 
     #[test]
@@ -366,11 +367,7 @@ mod tests {
         );
         assert_eq!(
             r.n_cross_module_edges,
-            Some(a.encapsulation.deepest_leaks.len() as i32)
-        );
-        assert_eq!(
-            r.max_leak_cost,
-            a.encapsulation.deepest_leaks.first().map(|l| l.leak_cost)
+            Some(a.encapsulation.n_cross_module_refs as i32)
         );
         assert_eq!(
             r.mean_instability,

@@ -72,9 +72,8 @@ CREATE TABLE analyses (
     largest_scc             INTEGER,
     modules_in_cycles       INTEGER,
     cyclomatic_number       INTEGER,
-    -- Encapsulation tails beyond the means: worst single leak cost, count of
-    -- over-exposed items, and number of cross-module dependency edges.
-    max_leak_cost           DOUBLE,
+    -- Encapsulation counts: over-exposed items and the number of cross-module
+    -- references (the denominator of mean_leak_cost, the leak rate = 1 - MII).
     n_over_exposed          INTEGER,
     n_cross_module_edges    INTEGER,
     -- Martin package metrics, aggregated over real modules.

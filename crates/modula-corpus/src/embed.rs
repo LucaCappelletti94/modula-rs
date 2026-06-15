@@ -84,11 +84,22 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
         .load::<Analysis>(&mut conn)
         .context("loading analyses")?;
 
+    // Confounding-variable check, on the full corpus (not the t-SNE subsample):
+    // does any metric track crate popularity (downloads) or age, rather than
+    // modularity? Printed before the embedding so it shows even with a cap.
+    confounder_report(&rows, &exts);
+
     // Keep crates with measurable structure (a defined headline) that also have
     // their structural row.
+    // Age reference: the most recent release in the corpus (a proxy for the
+    // db-dump date). Crate age in years is measured back from it.
+    let now_ref = exts.values().filter_map(|e| e.released_at).max();
+
     let mut raw: Vec<Vec<f64>> = Vec::new();
     let mut cat: Vec<Option<String>> = Vec::new();
     let mut kw: Vec<Option<String>> = Vec::new();
+    let mut dl: Vec<f64> = Vec::new();
+    let mut age: Vec<f64> = Vec::new();
     for a in &rows {
         if a.headline.is_none() {
             continue;
@@ -99,6 +110,8 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
         raw.push(features(a, e));
         cat.push(label_of(e, "category"));
         kw.push(label_of(e, "keyword"));
+        dl.push((e.downloads.max(1) as f64).log10());
+        age.push(age_years(e.released_at, now_ref));
     }
     if raw.len() < 3 {
         anyhow::bail!("only {} usable crates; nothing to embed", raw.len());
@@ -109,9 +122,12 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
         let step = raw.len().div_ceil(args.max_points);
         let pick = |v: &[Vec<f64>]| v.iter().step_by(step).cloned().collect();
         let pick_l = |v: &[Option<String>]| v.iter().step_by(step).cloned().collect();
+        let pick_f = |v: &[f64]| v.iter().step_by(step).copied().collect();
         raw = pick(&raw);
         cat = pick_l(&cat);
         kw = pick_l(&kw);
+        dl = pick_f(&dl);
+        age = pick_f(&age);
     }
     let n = raw.len();
     println!("embedding {n} crates over {} features", FEATURES.len());
@@ -173,10 +189,65 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
         &kw_groups,
     )?;
 
+    // Confounder views: the same PCA / t-SNE layouts colored by downloads and
+    // age. If a metric cluster coincides with a download or age band, the
+    // embedding is partly tracking that confounder.
+    let dl_fmt = |v: f64| humanize(10f64.powf(v));
+    let age_fmt = |v: f64| format!("{v:.0}y");
+    continuous_scatter(
+        &with_suffix(&args.out, "-pca-downloads.svg"),
+        "PCA (color: downloads)",
+        "PC1",
+        "PC2",
+        &pca.coords,
+        &dl,
+        "downloads",
+        dl_fmt,
+    )
+    .map_err(|e| anyhow::anyhow!("rendering pca downloads: {e}"))?;
+    continuous_scatter(
+        &with_suffix(&args.out, "-tsne-downloads.svg"),
+        "t-SNE (color: downloads)",
+        "t-SNE 1",
+        "t-SNE 2",
+        &tsne,
+        &dl,
+        "downloads",
+        dl_fmt,
+    )
+    .map_err(|e| anyhow::anyhow!("rendering tsne downloads: {e}"))?;
+    continuous_scatter(
+        &with_suffix(&args.out, "-pca-age.svg"),
+        "PCA (color: crate age)",
+        "PC1",
+        "PC2",
+        &pca.coords,
+        &age,
+        "age",
+        age_fmt,
+    )
+    .map_err(|e| anyhow::anyhow!("rendering pca age: {e}"))?;
+    continuous_scatter(
+        &with_suffix(&args.out, "-tsne-age.svg"),
+        "t-SNE (color: crate age)",
+        "t-SNE 1",
+        "t-SNE 2",
+        &tsne,
+        &age,
+        "age",
+        age_fmt,
+    )
+    .map_err(|e| anyhow::anyhow!("rendering tsne age: {e}"))?;
+    println!("wrote downloads/age confounder scatters");
+
     // Per-feature heatmaps over the t-SNE layout: where each input feature is
-    // high/low, which shows what actually drives the embedding.
+    // high/low, which shows what actually drives the embedding. The two
+    // confounders (downloads, age) are appended as extra panels in the same
+    // style so they can be compared directly: a flat (structureless) panel means
+    // the layout does not track that confounder.
     let feat_path = with_suffix(&args.out, "-features.svg");
-    feature_heatmaps(&feat_path, &tsne, &raw)
+    let extras: [(&str, &[f64]); 2] = [("log10(downloads)", &dl), ("age (years)", &age)];
+    feature_heatmaps(&feat_path, &tsne, &raw, &extras)
         .map_err(|e| anyhow::anyhow!("rendering heatmaps: {e}"))?;
     println!("wrote {}", feat_path.display());
     Ok(())
@@ -475,6 +546,7 @@ fn feature_heatmaps(
     path: &std::path::Path,
     coords: &[(f64, f64)],
     feats: &[Vec<f64>],
+    extras: &[(&str, &[f64])],
 ) -> std::result::Result<(), Box<dyn Error>> {
     let step = coords.len().div_ceil(6000).max(1);
     let idx: Vec<usize> = (0..coords.len()).step_by(step).collect();
@@ -489,19 +561,39 @@ fn feature_heatmaps(
         ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
     );
 
+    // One panel per input feature, then one per extra (confounder) series. The
+    // value getter unifies both: features come from `feats[i][j]`, extras from
+    // their own column.
+    let labels: Vec<&str> = FEATURES
+        .iter()
+        .copied()
+        .chain(extras.iter().map(|(name, _)| *name))
+        .collect();
+    let value = |i: usize, panel: usize| -> f64 {
+        if panel < FEATURES.len() {
+            feats[i][panel]
+        } else {
+            extras[panel - FEATURES.len()].1[i]
+        }
+    };
+
     let cols = 5;
-    let rows = FEATURES.len().div_ceil(cols);
+    let rows = labels.len().div_ceil(cols);
     let root = SVGBackend::new(path, (1800, 360 * rows as u32)).into_drawing_area();
     root.fill(&WHITE)?;
     let panels = root.split_evenly((rows, cols));
-    for (j, panel) in (0..FEATURES.len()).zip(panels.iter()) {
-        // Robust color range: 2nd-98th percentile of this feature.
-        let mut vals: Vec<f64> = idx.iter().map(|&i| feats[i][j]).collect();
+    for (j, panel) in (0..labels.len()).zip(panels.iter()) {
+        // Robust color range: 2nd-98th percentile of this panel's finite values.
+        let mut vals: Vec<f64> = idx
+            .iter()
+            .map(|&i| value(i, j))
+            .filter(|v| v.is_finite())
+            .collect();
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let (lo, hi) = (percentile(&vals, 0.02), percentile(&vals, 0.98));
         let span = if hi > lo { hi - lo } else { 1.0 };
         let mut chart = ChartBuilder::on(panel)
-            .caption(FEATURES[j], ("sans-serif", 15))
+            .caption(labels[j], ("sans-serif", 15))
             .margin(4)
             .build_cartesian_2d(xlo..xhi, ylo..yhi)?;
         chart
@@ -510,8 +602,14 @@ fn feature_heatmaps(
             .disable_axes()
             .draw()?;
         chart.draw_series(idx.iter().map(|&i| {
-            let t = ((feats[i][j] - lo) / span).clamp(0.0, 1.0);
-            Circle::new(coords[i], 1, viridis(t).filled())
+            let v = value(i, j);
+            // Points with no value (e.g. missing date) are drawn grey.
+            let color = if v.is_finite() {
+                viridis(((v - lo) / span).clamp(0.0, 1.0))
+            } else {
+                OTHER
+            };
+            Circle::new(coords[i], 1, color.filled())
         }))?;
     }
     root.present()?;
@@ -548,6 +646,232 @@ fn viridis(t: f64) -> RGBColor {
     }
     let (_, c) = STOPS[STOPS.len() - 1];
     RGBColor(c.0, c.1, c.2)
+}
+
+/// Crate age in years, measured back from `now_ref` (the corpus's most recent
+/// release). `NaN` when either the release date or the reference is unknown.
+fn age_years(released_at: Option<i64>, now_ref: Option<i64>) -> f64 {
+    match (released_at, now_ref) {
+        (Some(r), Some(n)) => (n - r) as f64 / (365.25 * 86400.0),
+        _ => f64::NAN,
+    }
+}
+
+/// A compact human count (`1.2M`, `340k`).
+fn humanize(n: f64) -> String {
+    if n >= 1e9 {
+        format!("{:.1}B", n / 1e9)
+    } else if n >= 1e6 {
+        format!("{:.1}M", n / 1e6)
+    } else if n >= 1e3 {
+        format!("{:.0}k", n / 1e3)
+    } else {
+        format!("{n:.0}")
+    }
+}
+
+/// Draws a 2D scatter colored by a continuous value (viridis) with a colorbar.
+/// `values` may hold `NaN` for points with no data; those are drawn grey
+/// underneath. The color range is the robust 2nd-98th percentile of the finite
+/// values; `fmt` renders a colorbar tick back to a human label.
+#[allow(clippy::too_many_arguments)]
+fn continuous_scatter(
+    path: &std::path::Path,
+    title: &str,
+    xlab: &str,
+    ylab: &str,
+    pts: &[(f64, f64)],
+    values: &[f64],
+    bar_label: &str,
+    fmt: impl Fn(f64) -> String,
+) -> std::result::Result<(), Box<dyn Error>> {
+    let root = SVGBackend::new(path, (1200, 950)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let (main, bar) = root.split_horizontally(1060);
+
+    let mut finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    finite.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let (lo, hi) = if finite.is_empty() {
+        (0.0, 1.0)
+    } else {
+        (percentile(&finite, 0.02), percentile(&finite, 0.98))
+    };
+    let span = if hi > lo { hi - lo } else { 1.0 };
+
+    let pad = |lo: f64, hi: f64| {
+        let m = (hi - lo).abs().max(1.0) * 0.05;
+        (lo - m, hi + m)
+    };
+    let (xlo, xhi) = pad(
+        pts.iter().map(|p| p.0).fold(f64::INFINITY, f64::min),
+        pts.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max),
+    );
+    let (ylo, yhi) = pad(
+        pts.iter().map(|p| p.1).fold(f64::INFINITY, f64::min),
+        pts.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max),
+    );
+    let mut chart = ChartBuilder::on(&main)
+        .caption(title, ("sans-serif", 20))
+        .margin(12)
+        .x_label_area_size(36)
+        .y_label_area_size(48)
+        .build_cartesian_2d(xlo..xhi, ylo..yhi)?;
+    chart
+        .configure_mesh()
+        .x_desc(xlab)
+        .y_desc(ylab)
+        .light_line_style(WHITE)
+        .draw()?;
+    chart.draw_series(
+        pts.iter()
+            .zip(values)
+            .filter(|(_, v)| !v.is_finite())
+            .map(|(&p, _)| Circle::new(p, 2, OTHER.mix(0.25).filled())),
+    )?;
+    chart.draw_series(
+        pts.iter()
+            .zip(values)
+            .filter(|(_, v)| v.is_finite())
+            .map(|(&p, &v)| {
+                let t = ((v - lo) / span).clamp(0.0, 1.0);
+                Circle::new(p, 2, viridis(t).mix(0.6).filled())
+            }),
+    )?;
+
+    // Colorbar: a vertical viridis gradient with value ticks.
+    let mut cb = ChartBuilder::on(&bar)
+        .caption(bar_label, ("sans-serif", 14))
+        .margin(12)
+        .margin_top(40)
+        .y_label_area_size(60)
+        .build_cartesian_2d(0.0..1.0, lo..hi)?;
+    cb.configure_mesh()
+        .disable_x_mesh()
+        .disable_y_mesh()
+        .disable_x_axis()
+        .y_label_formatter(&|v| fmt(*v))
+        .draw()?;
+    let steps = 64;
+    cb.draw_series((0..steps).map(|k| {
+        let t0 = f64::from(k) / f64::from(steps);
+        let t1 = f64::from(k + 1) / f64::from(steps);
+        let (y0, y1) = (lo + t0 * (hi - lo), lo + t1 * (hi - lo));
+        Rectangle::new([(0.0, y0), (1.0, y1)], viridis((t0 + t1) / 2.0).filled())
+    }))?;
+    root.present()?;
+    Ok(())
+}
+
+/// Prints Pearson r and Spearman rho of each metric against `log10(downloads)`
+/// and crate age, over the full corpus. A near-zero correlation means the metric
+/// is not explained by that confounder.
+fn confounder_report(rows: &[Analysis], exts: &HashMap<(String, String), Extraction>) {
+    /// Named accessor for one scalar metric of an analysis row.
+    type MetricFn = fn(&Analysis) -> Option<f64>;
+    let now_ref = exts.values().filter_map(|e| e.released_at).max();
+    let metrics: [(&str, MetricFn); 7] = [
+        ("headline", |a| a.headline),
+        ("modularity_term", |a| a.modularity_term),
+        ("divergence_term", |a| a.divergence_term),
+        ("acyclicity_term", |a| a.acyclicity_term),
+        ("encapsulation_term", |a| a.encapsulation_term),
+        ("over_exposed_fraction", |a| a.over_exposed_fraction),
+        ("mean_leak_cost", |a| a.mean_leak_cost),
+    ];
+    // Each row joined with its three confounders: log10(downloads), age in
+    // years, and ln(1 + real items) as a size proxy. NaN where unavailable.
+    let joined: Vec<(&Analysis, [f64; 3])> = rows
+        .iter()
+        .filter_map(|a| {
+            let e = exts.get(&(a.name.clone(), a.version.clone()))?;
+            let log_dl = (e.downloads.max(1) as f64).log10();
+            let size = a
+                .n_real_items
+                .map_or(f64::NAN, |v| f64::from(v.max(0)).ln_1p());
+            Some((a, [log_dl, age_years(e.released_at, now_ref), size]))
+        })
+        .collect();
+    let n_age = joined.iter().filter(|(_, c)| c[1].is_finite()).count();
+    println!(
+        "\n=== confounder check over {} crates ({} with a release date) ===",
+        joined.len(),
+        n_age
+    );
+    let cell = |p: &[(f64, f64)]| {
+        if p.len() < 3 {
+            "n/a".to_owned()
+        } else {
+            format!("r={:+.3} rho={:+.3}", pearson(p), spearman(p))
+        }
+    };
+    let pairs = |f: MetricFn, k: usize| -> Vec<(f64, f64)> {
+        joined
+            .iter()
+            .filter_map(|(a, c)| {
+                (c[k].is_finite())
+                    .then(|| f(a).map(|m| (m, c[k])))
+                    .flatten()
+            })
+            .collect()
+    };
+    println!(
+        "{:<22}  {:<28}  {:<28}  vs ln(size)",
+        "metric", "vs log10(downloads)", "vs age(years)"
+    );
+    for (name, f) in metrics {
+        println!(
+            "{name:<22}  {:<28}  {:<28}  {}",
+            cell(&pairs(f, 0)),
+            cell(&pairs(f, 1)),
+            cell(&pairs(f, 2)),
+        );
+    }
+    println!();
+}
+
+/// Pearson correlation of paired samples (0 when a side has no variance).
+fn pearson(p: &[(f64, f64)]) -> f64 {
+    let n = p.len() as f64;
+    let (sx, sy) = p
+        .iter()
+        .fold((0.0, 0.0), |(sx, sy), (x, y)| (sx + x, sy + y));
+    let (mx, my) = (sx / n, sy / n);
+    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+    for &(x, y) in p {
+        let (dx, dy) = (x - mx, y - my);
+        sxy += dx * dy;
+        sxx += dx * dx;
+        syy += dy * dy;
+    }
+    let d = (sxx * syy).sqrt();
+    if d > 0.0 { sxy / d } else { 0.0 }
+}
+
+/// Spearman rank correlation (Pearson on average-tied ranks).
+fn spearman(p: &[(f64, f64)]) -> f64 {
+    let rx = ranks(&p.iter().map(|q| q.0).collect::<Vec<_>>());
+    let ry = ranks(&p.iter().map(|q| q.1).collect::<Vec<_>>());
+    pearson(&rx.into_iter().zip(ry).collect::<Vec<_>>())
+}
+
+/// Average (tie-corrected) 1-based ranks of `v`.
+fn ranks(v: &[f64]) -> Vec<f64> {
+    let mut idx: Vec<usize> = (0..v.len()).collect();
+    idx.sort_by(|&a, &b| v[a].partial_cmp(&v[b]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut r = vec![0.0; v.len()];
+    let mut i = 0;
+    while i < idx.len() {
+        let mut j = i;
+        while j + 1 < idx.len() && v[idx[j + 1]] == v[idx[i]] {
+            j += 1;
+        }
+        let avg = (i + j) as f64 / 2.0 + 1.0;
+        for &k in &idx[i..=j] {
+            r[k] = avg;
+        }
+        i = j + 1;
+    }
+    r
 }
 
 /// Appends a suffix to a path's file name (`plots/embed` + `-pca.svg`).

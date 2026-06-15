@@ -25,8 +25,8 @@ Over-exposed items (8):
   k::item3                         Crate -> Private
   k::item4                         Crate -> Super
 
-Deepest leaks (cost):
-  1.000  k::item3 -> k::item4
+Leaks (cross-module references into internals, 1 of 1 cross-module refs):
+  k::item3 -> k::item4 (Crate)
 
 Modularity profile (depth: declared/detected Q, efficiency):
   d0 c1   U   0.000/  0.460 e 0.000  D  -0.000/  0.461 e 0.000

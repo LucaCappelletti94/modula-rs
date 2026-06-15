@@ -20,6 +20,7 @@ mod dump;
 mod embed;
 mod extract;
 mod http;
+mod meta;
 mod models;
 mod plot;
 mod schema;
@@ -63,6 +64,15 @@ enum Command {
         root: PathBuf,
         #[arg(long, default_value = "corpus.db")]
         db: String,
+    },
+    /// Backfill crates.io metadata (release date) onto existing extraction rows.
+    Meta {
+        #[arg(long, default_value = DEFAULT_ROOT)]
+        root: PathBuf,
+        #[arg(long, default_value = "corpus.db")]
+        db: String,
+        #[arg(long, default_value_t = 100_000)]
+        min_downloads: i64,
     },
     /// Render the metric distributions to an SVG grid of histograms.
     Plot {
@@ -116,6 +126,15 @@ fn main() -> Result<()> {
             limit,
         }),
         Command::Sweep { root, db } => sweep::run(&sweep::SweepArgs { root, db_path: db }),
+        Command::Meta {
+            root,
+            db,
+            min_downloads,
+        } => meta::run(&meta::MetaArgs {
+            root,
+            db_path: db,
+            min_downloads,
+        }),
         Command::Plot { root, db, out } => {
             let out = if out.is_absolute() {
                 out

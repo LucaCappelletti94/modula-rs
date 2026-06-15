@@ -33,9 +33,6 @@ pub enum AnalysisError {
     /// Modularity scoring or detection failed.
     #[error("modularity analysis failed: {0:?}")]
     Modularity(geometric_traits::traits::algorithms::ModularityError),
-    /// Encapsulation analysis failed.
-    #[error(transparent)]
-    Encapsulation(#[from] crate::encapsulation::EncapsulationError),
 }
 
 impl From<geometric_traits::traits::algorithms::ModularityError> for AnalysisError {
@@ -88,7 +85,7 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
     let n_module_nodes = agg.len();
     let modules = module_coupling(ir, &agg);
     let tangles = tangles(&agg)?;
-    let encapsulation = encapsulation(ir)?;
+    let encapsulation = encapsulation(ir);
 
     // Modularity and divergence need the item graphs; a crate with no real
     // items (empty, or a pure module-stub facade) has none.

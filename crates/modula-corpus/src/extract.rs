@@ -232,6 +232,7 @@ fn process(
         categories: non_empty(&item.categories),
         keywords: non_empty(&item.keywords),
         ts: now_secs(),
+        released_at: item.released_at,
     };
 
     let prepare_started = Instant::now();

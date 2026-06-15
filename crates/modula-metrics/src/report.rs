@@ -181,13 +181,22 @@ pub fn to_human(result: &AnalysisResult) -> String {
     }
     let _ = writeln!(s);
 
-    // Deepest leaks.
-    if result.encapsulation.deepest_leaks.is_empty() {
-        let _ = writeln!(s, "Deepest leaks: none");
+    // Leaks: cross-module references that reach a module's non-API internals.
+    if result.encapsulation.leaks.is_empty() {
+        let _ = writeln!(s, "Leaks (cross-module references into internals): none");
     } else {
-        let _ = writeln!(s, "Deepest leaks (cost):");
-        for l in result.encapsulation.deepest_leaks.iter().take(5) {
-            let _ = writeln!(s, "  {:.3}  {} -> {}", l.leak_cost, l.from_path, l.to_path);
+        let _ = writeln!(
+            s,
+            "Leaks (cross-module references into internals, {} of {} cross-module refs):",
+            result.encapsulation.leaks.len(),
+            result.encapsulation.n_cross_module_refs
+        );
+        for l in result.encapsulation.leaks.iter().take(5) {
+            let _ = writeln!(
+                s,
+                "  {} -> {} ({:?})",
+                l.from_path, l.to_path, l.target_visibility
+            );
         }
     }
     let _ = writeln!(s);
@@ -268,7 +277,8 @@ mod tests {
             encapsulation: EncapsulationReport {
                 over_exposed: Vec::new(),
                 over_exposed_fraction,
-                deepest_leaks: Vec::new(),
+                leaks: Vec::new(),
+                n_cross_module_refs: 0,
                 mean_leak_cost: 0.0,
             },
             composite: CompositeScore {
@@ -342,7 +352,7 @@ mod tests {
         assert!(text.contains("Modularity report for crate `demo`"));
         assert!(text.contains("Cycles: none"));
         assert!(text.contains("Over-exposed items: none"));
-        assert!(text.contains("Deepest leaks: none"));
+        assert!(text.contains("Leaks (cross-module references into internals): none"));
     }
 
     #[test]
@@ -370,14 +380,14 @@ mod tests {
             required: Visibility::Crate,
             reachable_pub_api: false,
         }];
-        r.encapsulation.deepest_leaks = vec![Leak {
+        r.encapsulation.leaks = vec![Leak {
             from: ItemId(0),
             to: ItemId(1),
             from_path: "demo::a".to_owned(),
             to_path: "demo::b::Deep".to_owned(),
-            lin: 0.1,
-            leak_cost: 0.9,
+            target_visibility: Visibility::Crate,
         }];
+        r.encapsulation.n_cross_module_refs = 3;
         r.modularity_profile = vec![DepthRecord {
             depth: 1,
             communities_declared: 2,
@@ -403,7 +413,7 @@ mod tests {
         assert!(text.contains("demo::a"));
         assert!(text.contains("tangle(s)"));
         assert!(text.contains("Over-exposed items (1)"));
-        assert!(text.contains("Deepest leaks (cost)"));
+        assert!(text.contains("Leaks (cross-module references into internals"));
         // `efficiency_directed: None` exercises the `n/a` branch of `opt`.
         assert!(text.contains("n/a"));
     }

@@ -26,6 +26,8 @@ pub struct CrateVersion {
     pub categories: String,
     /// Comma-joined crates.io keyword slugs (free-form), or empty.
     pub keywords: String,
+    /// Publish time of this version (unix seconds), from `versions.created_at`.
+    pub released_at: Option<i64>,
 }
 
 /// Streams `dump_path` once and returns every crate whose download count is at
@@ -35,6 +37,7 @@ pub fn build_worklist(dump_path: &str, min_downloads: i64) -> Result<Vec<CrateVe
     let mut names: HashMap<i64, String> = HashMap::new();
     let mut default_vid: HashMap<i64, i64> = HashMap::new();
     let mut vid_num: HashMap<i64, String> = HashMap::new();
+    let mut vid_created: HashMap<i64, i64> = HashMap::new();
     // Metadata: id -> slug, plus crate_id -> [id]. Joined to slug strings below.
     let mut cat_slug: HashMap<i64, String> = HashMap::new();
     let mut crate_cats: HashMap<i64, Vec<i64>> = HashMap::new();
@@ -72,11 +75,16 @@ pub fn build_worklist(dump_path: &str, min_downloads: i64) -> Result<Vec<CrateVe
                     default_vid.insert(cid, vid);
                 }
             })?,
-            "versions.csv" => two_col(&mut entry, "id", "num", |id, num| {
-                if let Ok(id) = id.parse::<i64>() {
-                    vid_num.insert(id, num.to_owned());
-                }
-            })?,
+            "versions.csv" => {
+                three_col(&mut entry, "id", "num", "created_at", |id, num, created| {
+                    if let Ok(id) = id.parse::<i64>() {
+                        vid_num.insert(id, num.to_owned());
+                        if let Some(ts) = parse_created_at(created) {
+                            vid_created.insert(id, ts);
+                        }
+                    }
+                })?
+            }
             "categories.csv" => two_col(&mut entry, "id", "slug", |id, slug| {
                 if let Ok(id) = id.parse::<i64>() {
                     cat_slug.insert(id, slug.to_owned());
@@ -115,6 +123,7 @@ pub fn build_worklist(dump_path: &str, min_downloads: i64) -> Result<Vec<CrateVe
                 downloads: dl,
                 categories: join_slugs(crate_cats.get(&cid), &cat_slug),
                 keywords: join_slugs(crate_kws.get(&cid), &kw_slug),
+                released_at: vid_created.get(vid).copied(),
             })
         })
         .collect();
@@ -140,6 +149,66 @@ fn join_slugs(ids: Option<&Vec<i64>>, slugs: &HashMap<i64, String>) -> String {
     out.join(",")
 }
 
+/// Parses a CSV stream, invoking `f(col_a, col_b, col_c)` for every row.
+fn three_col<R: Read>(
+    reader: R,
+    a: &str,
+    b: &str,
+    c: &str,
+    mut f: impl FnMut(&str, &str, &str),
+) -> Result<()> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(reader);
+    let headers = rdr.headers().context("reading CSV header")?.clone();
+    let col = |name: &str| {
+        headers
+            .iter()
+            .position(|h| h == name)
+            .with_context(|| format!("no column `{name}`"))
+    };
+    let (ia, ib, ic) = (col(a)?, col(b)?, col(c)?);
+    for rec in rdr.records() {
+        let rec = rec.context("reading CSV row")?;
+        if let (Some(va), Some(vb), Some(vc)) = (rec.get(ia), rec.get(ib), rec.get(ic)) {
+            f(va, vb, vc);
+        }
+    }
+    Ok(())
+}
+
+/// Parses a crates.io `created_at` timestamp (`YYYY-MM-DD HH:MM:SS[.ffffff][+00]`)
+/// to unix seconds. Returns `None` if the leading date does not parse. Uses
+/// Howard Hinnant's `days_from_civil` so it needs no date dependency.
+fn parse_created_at(s: &str) -> Option<i64> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 {
+        return None;
+    }
+    let num = |range: std::ops::Range<usize>| s.get(range)?.parse::<i64>().ok();
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Time portion is optional; default to midnight when absent or malformed.
+    let (hh, mm, ss) = if bytes.len() >= 19 && bytes[10] == b' ' {
+        (
+            num(11..13).unwrap_or(0),
+            num(14..16).unwrap_or(0),
+            num(17..19).unwrap_or(0),
+        )
+    } else {
+        (0, 0, 0)
+    };
+    let yy = y - i64::from(m <= 2);
+    let era = (if yy >= 0 { yy } else { yy - 399 }) / 400;
+    let yoe = yy - era * 400;
+    let doy = (153 * (m + (if m > 2 { -3 } else { 9 })) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    Some(days * 86400 + hh * 3600 + mm * 60 + ss)
+}
+
 /// Parses a CSV stream, invoking `f(col_a, col_b)` for every row.
 fn two_col<R: Read>(reader: R, a: &str, b: &str, mut f: impl FnMut(&str, &str)) -> Result<()> {
     let mut rdr = csv::ReaderBuilder::new()
@@ -161,4 +230,29 @@ fn two_col<R: Read>(reader: R, a: &str, b: &str, mut f: impl FnMut(&str, &str)) 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_created_at;
+
+    #[test]
+    fn parses_dump_timestamp_to_unix_seconds() {
+        // Reference values from `date -u -d '...' +%s`.
+        // 2024-07-19 17:09:31 UTC -> 1721408971.
+        assert_eq!(
+            parse_created_at("2024-07-19 17:09:31.683638+00"),
+            Some(1_721_408_971)
+        );
+        // Epoch and a date-only string (midnight).
+        assert_eq!(parse_created_at("1970-01-01 00:00:00"), Some(0));
+        assert_eq!(parse_created_at("2015-12-09"), Some(1_449_619_200));
+    }
+
+    #[test]
+    fn rejects_malformed_dates() {
+        assert_eq!(parse_created_at(""), None);
+        assert_eq!(parse_created_at("not-a-date"), None);
+        assert_eq!(parse_created_at("2024-13-01 00:00:00"), None);
+    }
 }

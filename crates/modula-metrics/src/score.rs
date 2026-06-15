@@ -207,7 +207,8 @@ mod unit_tests {
         EncapsulationReport {
             over_exposed: Vec::new(),
             over_exposed_fraction: over,
-            deepest_leaks: Vec::new(),
+            leaks: Vec::new(),
+            n_cross_module_refs: 0,
             mean_leak_cost: leak,
         }
     }

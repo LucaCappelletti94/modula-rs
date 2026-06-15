@@ -45,6 +45,9 @@ pub struct Extraction {
     /// Comma-joined crates.io keyword slugs (free-form author tags).
     pub keywords: Option<String>,
     pub ts: i64,
+    /// Publish time of this crate version (unix seconds), from the db-dump
+    /// `versions.created_at`. `None` until backfilled by the `meta` subcommand.
+    pub released_at: Option<i64>,
 }
 
 /// A row of the `analyses` table: the metric outcome of one crate's sweep.
@@ -70,7 +73,6 @@ pub struct Analysis {
     pub largest_scc: Option<i32>,
     pub modules_in_cycles: Option<i32>,
     pub cyclomatic_number: Option<i32>,
-    pub max_leak_cost: Option<f64>,
     pub n_over_exposed: Option<i32>,
     pub n_cross_module_edges: Option<i32>,
     pub mean_instability: Option<f64>,

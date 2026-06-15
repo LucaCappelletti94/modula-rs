@@ -4,28 +4,19 @@
 //! - **Over-exposure**: an item whose declared visibility is wider than its
 //!   actual use-set requires (for example a `pub` item used only within its own
 //!   module).
-//! - **Leak depth**: each cross-module dependency edge is costed by how far apart
-//!   its two real `mod`s sit in the module tree, using Lin similarity. The cost
-//!   is `1 - lin(m_src, m_dst)`: near 0 for closely related modules (deep shared
-//!   ancestor), near 1 when the only shared ancestor is the crate root. Owning
-//!   modules are climbed past synthetic per-type containers first, so two types
-//!   in one module are intra-module (not a leak).
+//! - **Interface legitimacy (leaks)**: a cross-module reference is a *leak* when
+//!   its target is not part of the crate's public API (`reachable_pub_api`),
+//!   i.e. it reaches into another module's internals instead of its published
+//!   surface. `mean_leak_cost` is the fraction of cross-real-module references
+//!   that are leaks, i.e. `1 - MII`, the complement of Sarkar/Kak's Module
+//!   Interaction Index (IEEE TSE 33(1), 2007). Owning modules are climbed past
+//!   synthetic per-type containers first, so two types in one module are
+//!   intra-module, not a cross-module reference.
 
-use geometric_traits::{
-    impls::{CSR2D, SortedVec, SquareCSR2D},
-    naive_structs::DiGraph,
-    prelude::*,
-};
+use std::collections::HashSet;
+
 use modula_ir::{CrateGraph, ItemId, ModuleId, Visibility};
 use serde::Serialize;
-
-/// An error computing encapsulation metrics.
-#[derive(Debug, thiserror::Error)]
-pub enum EncapsulationError {
-    /// The module tree could not be built or its information content computed.
-    #[error("module tree analysis failed: {0}")]
-    Tree(String),
-}
 
 /// An item exposed more widely than its use-set requires.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -42,21 +33,20 @@ pub struct OverExposure {
     pub reachable_pub_api: bool,
 }
 
-/// A cross-module dependency edge, costed by how far apart its modules are.
+/// A leak: a cross-module reference whose target is not part of the crate's
+/// public API, i.e. it reaches into another module's internals.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Leak {
     /// The referring item.
     pub from: ItemId,
-    /// The referenced item.
+    /// The referenced (internal) item.
     pub to: ItemId,
     /// Canonical path of the referring item.
     pub from_path: String,
     /// Canonical path of the referenced item.
     pub to_path: String,
-    /// Lin similarity of the two owning modules, in `[0, 1]`.
-    pub lin: f64,
-    /// Leak cost `1 - lin`, in `[0, 1]`.
-    pub leak_cost: f64,
+    /// Declared visibility of the referenced item (how internal it is).
+    pub target_visibility: Visibility,
 }
 
 /// The encapsulation report for a crate graph.
@@ -67,18 +57,20 @@ pub struct EncapsulationReport {
     pub over_exposed: Vec<OverExposure>,
     /// Fraction of items that are over-exposed.
     pub over_exposed_fraction: f64,
-    /// Cross-module leaks, ranked by descending cost.
-    pub deepest_leaks: Vec<Leak>,
-    /// Mean leak cost across cross-module edges (`0` when there are none).
+    /// Cross-module references that reach a non-API (internal) item.
+    pub leaks: Vec<Leak>,
+    /// Total number of distinct cross-real-module references (the denominator of
+    /// the leak rate).
+    pub n_cross_module_refs: usize,
+    /// Leak rate: `leaks / n_cross_module_refs`, the fraction of cross-module
+    /// references that pierce a module's internals (`0` when there are none).
+    /// Equals `1 - MII` (Module Interaction Index).
     pub mean_leak_cost: f64,
 }
 
 /// Computes the encapsulation report.
-///
-/// # Errors
-/// Returns [`EncapsulationError`] if the module-tree information content cannot
-/// be computed.
-pub fn encapsulation(ir: &CrateGraph) -> Result<EncapsulationReport, EncapsulationError> {
+#[must_use]
+pub fn encapsulation(ir: &CrateGraph) -> EncapsulationReport {
     let over_exposed = over_exposed(ir);
     let over_exposed_fraction = if ir.items.is_empty() {
         0.0
@@ -86,14 +78,20 @@ pub fn encapsulation(ir: &CrateGraph) -> Result<EncapsulationReport, Encapsulati
         over_exposed.len() as f64 / ir.items.len() as f64
     };
 
-    let (deepest_leaks, mean_leak_cost) = leaks(ir)?;
+    let (leaks, n_cross_module_refs) = leaks(ir);
+    let mean_leak_cost = if n_cross_module_refs == 0 {
+        0.0
+    } else {
+        leaks.len() as f64 / n_cross_module_refs as f64
+    };
 
-    Ok(EncapsulationReport {
+    EncapsulationReport {
         over_exposed,
         over_exposed_fraction,
-        deepest_leaks,
+        leaks,
+        n_cross_module_refs,
         mean_leak_cost,
-    })
+    }
 }
 
 /// Finds items whose declared visibility exceeds what their consumers require.
@@ -181,75 +179,38 @@ fn is_within_subtree(ir: &CrateGraph, module: ModuleId, ancestor: ModuleId) -> b
     false
 }
 
-/// Computes per-edge leak costs (ranked) and their mean.
-fn leaks(ir: &CrateGraph) -> Result<(Vec<Leak>, f64), EncapsulationError> {
-    let n = ir.modules.len();
-    let vocabulary: SortedVec<usize> = GenericVocabularyBuilder::default()
-        .expected_number_of_symbols(n)
-        .symbols((0..n).enumerate())
-        .build()
-        .map_err(|e| EncapsulationError::Tree(format!("{e:?}")))?;
-
-    // Edges point parent -> child so the crate root is the source (least
-    // specific, information content 0) and leaf modules are sinks. The edge
-    // builder requires row-major sorted coordinates.
-    let mut dag_edges: Vec<(usize, usize)> = ir
-        .modules
-        .iter()
-        .filter_map(|m| m.parent.map(|parent| (parent.index(), m.id.index())))
-        .collect();
-    dag_edges.sort_unstable();
-    let edges: SquareCSR2D<CSR2D<usize, usize, usize>> = DiEdgesBuilder::default()
-        .expected_number_of_edges(dag_edges.len())
-        .expected_shape(n)
-        .edges(dag_edges.iter().copied())
-        .build()
-        .map_err(|e| EncapsulationError::Tree(format!("{e:?}")))?;
-
-    let graph: DiGraph<usize> = DiGraph::from((vocabulary, edges));
-    // Uniform occurrences: information content reflects tree position, and every
-    // leaf module has a non-zero occurrence.
-    let occurrences = vec![1usize; n];
-    let lin = graph
-        .lin(&occurrences)
-        .map_err(|e| EncapsulationError::Tree(format!("{e:?}")))?;
-
-    // One leak per unique cross-module item edge. Owning modules are climbed to
-    // their real `mod` (past synthetic per-type containers): Rust has no
-    // per-type visibility scope, so a reference between two types in the same
-    // module is intra-module, not a leak. Costing it against the type containers
-    // (whose only shared ancestor is the crate root, information content 0)
-    // would read every cross-type edge in a flat crate as a maximal leak.
-    let mut seen = std::collections::HashSet::new();
+/// Returns the leaks (cross-module references targeting a non-API item) and the
+/// total number of distinct cross-real-module references.
+///
+/// Owning modules are climbed to their real `mod` (past synthetic per-type
+/// containers): Rust has no per-type visibility scope, so a reference between
+/// two types in the same module is intra-module, not cross-module. A cross-module
+/// reference whose target is `reachable_pub_api` goes through the crate's public
+/// surface (legitimate); otherwise it reaches an internal item (a leak), the
+/// implicit-dependency notion from Sarkar/Kak's API-based modularization metrics.
+fn leaks(ir: &CrateGraph) -> (Vec<Leak>, usize) {
+    let mut seen = HashSet::new();
     let mut leaks = Vec::new();
+    let mut n_cross_module_refs = 0usize;
     for edge in &ir.edges {
         let src_module = ir.real_module(ir.item(edge.from).owning_module);
         let dst_module = ir.real_module(ir.item(edge.to).owning_module);
         if src_module == dst_module || !seen.insert((edge.from, edge.to)) {
             continue;
         }
-        let similarity = lin.similarity(&src_module.index(), &dst_module.index());
-        leaks.push(Leak {
-            from: edge.from,
-            to: edge.to,
-            from_path: ir.item(edge.from).canonical_path.clone(),
-            to_path: ir.item(edge.to).canonical_path.clone(),
-            lin: similarity,
-            leak_cost: 1.0 - similarity,
-        });
+        n_cross_module_refs += 1;
+        let target = ir.item(edge.to);
+        if !target.reachable_pub_api {
+            leaks.push(Leak {
+                from: edge.from,
+                to: edge.to,
+                from_path: ir.item(edge.from).canonical_path.clone(),
+                to_path: target.canonical_path.clone(),
+                target_visibility: target.visibility.clone(),
+            });
+        }
     }
-
-    let mean_leak_cost = if leaks.is_empty() {
-        0.0
-    } else {
-        leaks.iter().map(|l| l.leak_cost).sum::<f64>() / leaks.len() as f64
-    };
-    leaks.sort_by(|a, b| {
-        b.leak_cost
-            .partial_cmp(&a.leak_cost)
-            .unwrap_or(core::cmp::Ordering::Equal)
-    });
-    Ok((leaks, mean_leak_cost))
+    (leaks, n_cross_module_refs)
 }
 
 #[cfg(test)]
@@ -303,10 +264,11 @@ mod tests {
     }
 
     /// Builds a crate with `module_kinds[i]`/`parents[i]` modules and items
-    /// `(owning_module, kind)`, plus a single Body edge `item0 -> item1`.
+    /// `(owning_module, kind, reachable_pub_api)`, plus a single Body edge
+    /// `item0 -> item1`.
     fn crate_with(
         module_kinds: &[(Option<u32>, u32, ModuleKind)],
-        items: &[(u32, ItemKind)],
+        items: &[(u32, ItemKind, bool)],
     ) -> CrateGraph {
         let modules = module_kinds
             .iter()
@@ -325,7 +287,7 @@ mod tests {
         let items = items
             .iter()
             .enumerate()
-            .map(|(i, &(owner, kind))| Item {
+            .map(|(i, &(owner, kind, reachable_pub_api))| Item {
                 id: ItemId(i as u32),
                 canonical_path: format!("c::i{i}"),
                 kind,
@@ -333,7 +295,7 @@ mod tests {
                 owning_module: ModuleId(owner),
                 crate_id: CrateId(0),
                 has_canonical_path: true,
-                reachable_pub_api: true,
+                reachable_pub_api,
             })
             .collect();
         CrateGraph {
@@ -358,44 +320,58 @@ mod tests {
     }
 
     #[test]
-    fn cross_type_edge_in_one_module_is_not_a_leak() {
+    fn cross_type_edge_in_one_module_is_not_cross_module() {
         // root mod (0) with two per-type containers Foo (1) and Bar (2); one
-        // item in each, with a Foo -> Bar edge. Both types live in the same real
-        // module, so the edge is intra-module: no leak.
+        // item in each, with a Foo -> Bar edge. Both types roll up to the same
+        // real module, so it is not a cross-module reference at all.
         let g = crate_with(
             &[
                 (None, 0, ModuleKind::Mod),
                 (Some(0), 1, ModuleKind::Type),
                 (Some(0), 1, ModuleKind::Type),
             ],
-            &[(1, ItemKind::Struct), (2, ItemKind::Struct)],
+            &[(1, ItemKind::Struct, true), (2, ItemKind::Struct, true)],
         );
-        let report = encapsulation(&g).expect("encapsulation computes");
-        assert!(
-            report.deepest_leaks.is_empty(),
-            "two types in one module must not leak, got {:?}",
-            report.deepest_leaks
-        );
+        let report = encapsulation(&g);
+        assert_eq!(report.n_cross_module_refs, 0);
+        assert!(report.leaks.is_empty());
         assert_eq!(report.mean_leak_cost, 0.0);
     }
 
     #[test]
-    fn cross_real_module_edge_is_still_a_leak() {
-        // Two real sibling modules a (1) and b (2) under the root; an item in a
-        // references an item in b. This is a genuine cross-module leak.
+    fn cross_module_call_to_public_api_is_not_a_leak() {
+        // Two real sibling modules; module a references a PUBLIC-API item in b.
+        // That is legitimate interface use, not a leak (MII = 1).
         let g = crate_with(
             &[
                 (None, 0, ModuleKind::Mod),
                 (Some(0), 1, ModuleKind::Mod),
                 (Some(0), 1, ModuleKind::Mod),
             ],
-            &[(1, ItemKind::Struct), (2, ItemKind::Struct)],
+            &[(1, ItemKind::Struct, true), (2, ItemKind::Struct, true)],
         );
-        let report = encapsulation(&g).expect("encapsulation computes");
-        assert_eq!(report.deepest_leaks.len(), 1, "one cross-module edge");
-        assert!(
-            report.mean_leak_cost > 0.0,
-            "a cross-real-module edge must carry positive leak cost"
+        let report = encapsulation(&g);
+        assert_eq!(report.n_cross_module_refs, 1);
+        assert!(report.leaks.is_empty(), "API target is not a leak");
+        assert_eq!(report.mean_leak_cost, 0.0);
+    }
+
+    #[test]
+    fn cross_module_reach_into_internals_is_a_leak() {
+        // Same shape, but b's item is NOT public API (reachable_pub_api = false):
+        // module a reaches into b's internals, the implicit-dependency leak.
+        let g = crate_with(
+            &[
+                (None, 0, ModuleKind::Mod),
+                (Some(0), 1, ModuleKind::Mod),
+                (Some(0), 1, ModuleKind::Mod),
+            ],
+            &[(1, ItemKind::Struct, true), (2, ItemKind::Struct, false)],
         );
+        let report = encapsulation(&g);
+        assert_eq!(report.n_cross_module_refs, 1);
+        assert_eq!(report.leaks.len(), 1, "reaching an internal item is a leak");
+        assert_eq!(report.leaks[0].to, ItemId(1));
+        assert_eq!(report.mean_leak_cost, 1.0);
     }
 }
