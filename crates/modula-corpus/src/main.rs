@@ -82,11 +82,9 @@ enum Command {
         #[arg(
             long,
             default_value = "plots/embed",
-            help = "output prefix; -pca.svg / -tsne.svg appended"
+            help = "output prefix; view suffixes are appended"
         )]
         out: PathBuf,
-        #[arg(long, default_value = "category", help = "category | keyword")]
-        color_by: String,
         #[arg(long, default_value_t = 30.0)]
         perplexity: f64,
         #[arg(long, default_value_t = 0, help = "cap on points (0 = all)")]
@@ -137,7 +135,6 @@ fn main() -> Result<()> {
             root,
             db,
             out,
-            color_by,
             perplexity,
             max_points,
         } => {
@@ -153,7 +150,6 @@ fn main() -> Result<()> {
                 root,
                 db_path: db,
                 out,
-                color_by,
                 perplexity,
                 max_points,
             })

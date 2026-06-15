@@ -21,10 +21,8 @@ use crate::schema::{analyses, extractions};
 pub struct EmbedArgs {
     pub root: PathBuf,
     pub db_path: String,
-    /// Output path prefix; `-pca.svg` and `-tsne.svg` are appended.
+    /// Output path prefix; the view suffixes are appended.
     pub out: PathBuf,
-    /// `category` (the standardized taxonomy) or `keyword`.
-    pub color_by: String,
     pub perplexity: f64,
     /// Cap on points (0 = all); larger sets make t-SNE slower.
     pub max_points: usize,
@@ -89,8 +87,8 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
     // Keep crates with measurable structure (a defined headline) that also have
     // their structural row.
     let mut raw: Vec<Vec<f64>> = Vec::new();
-    let mut labels: Vec<Option<String>> = Vec::new();
-    let mut names: Vec<String> = Vec::new();
+    let mut cat: Vec<Option<String>> = Vec::new();
+    let mut kw: Vec<Option<String>> = Vec::new();
     for a in &rows {
         if a.headline.is_none() {
             continue;
@@ -99,8 +97,8 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
             continue;
         };
         raw.push(features(a, e));
-        labels.push(label_of(e, &args.color_by));
-        names.push(a.name.clone());
+        cat.push(label_of(e, "category"));
+        kw.push(label_of(e, "keyword"));
     }
     if raw.len() < 3 {
         anyhow::bail!("only {} usable crates; nothing to embed", raw.len());
@@ -109,34 +107,17 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
     // Optional subsample (deterministic stride) to keep t-SNE responsive.
     if args.max_points > 0 && raw.len() > args.max_points {
         let step = raw.len().div_ceil(args.max_points);
-        let keep = |i: usize| i.is_multiple_of(step);
-        raw = raw
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| keep(*i))
-            .map(|(_, v)| v.clone())
-            .collect();
-        labels = labels
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| keep(*i))
-            .map(|(_, v)| v.clone())
-            .collect();
-        names = names
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| keep(*i))
-            .map(|(_, v)| v.clone())
-            .collect();
+        let pick = |v: &[Vec<f64>]| v.iter().step_by(step).cloned().collect();
+        let pick_l = |v: &[Option<String>]| v.iter().step_by(step).cloned().collect();
+        raw = pick(&raw);
+        cat = pick_l(&cat);
+        kw = pick_l(&kw);
     }
-    let _ = names;
     let n = raw.len();
     println!("embedding {n} crates over {} features", FEATURES.len());
-
     standardize(&mut raw);
-    let (groups, group_of) = color_groups(&labels);
 
-    // PCA: project onto the top-2 principal axes of the standardized data.
+    // Compute both projections once; every view below reuses them.
     let pca = pca_2d(&raw);
     println!(
         "PCA variance explained: PC1 {:.1}%, PC2 {:.1}%",
@@ -145,35 +126,59 @@ pub fn run(args: &EmbedArgs) -> Result<()> {
     );
     println!("  PC1 top loadings: {}", pca.loadings.0);
     println!("  PC2 top loadings: {}", pca.loadings.1);
+    println!("running t-SNE on {n} points (this takes a few minutes) ...");
+    let tsne = tsne_2d(&raw, args.perplexity);
 
-    let pca_path = with_suffix(&args.out, "-pca.svg");
-    scatter(
-        &pca_path,
-        "PCA of crate modularity features",
+    // Categorical scatters (PCA + t-SNE) colored by category, and t-SNE by keyword.
+    let (cat_groups, cat_of) = color_groups(&cat);
+    let (kw_groups, kw_of) = color_groups(&kw);
+    let write = |path: PathBuf,
+                 title,
+                 xl,
+                 yl,
+                 pts: &[(f64, f64)],
+                 g: &[usize],
+                 groups: &[(String, RGBColor)]|
+     -> Result<()> {
+        scatter(&path, title, xl, yl, pts, g, groups)
+            .map_err(|e| anyhow::anyhow!("rendering {}: {e}", path.display()))?;
+        println!("wrote {}", path.display());
+        Ok(())
+    };
+    write(
+        with_suffix(&args.out, "-pca.svg"),
+        "PCA (color: category)",
         "PC1",
         "PC2",
         &pca.coords,
-        &group_of,
-        &groups,
-    )
-    .map_err(|e| anyhow::anyhow!("rendering PCA: {e}"))?;
-    println!("wrote {}", pca_path.display());
-
-    // t-SNE on the standardized features (Barnes-Hut).
-    println!("running t-SNE on {n} points (this takes a few minutes) ...");
-    let tsne = tsne_2d(&raw, args.perplexity);
-    let tsne_path = with_suffix(&args.out, "-tsne.svg");
-    scatter(
-        &tsne_path,
-        "t-SNE of crate modularity features",
+        &cat_of,
+        &cat_groups,
+    )?;
+    write(
+        with_suffix(&args.out, "-tsne.svg"),
+        "t-SNE (color: category)",
         "t-SNE 1",
         "t-SNE 2",
         &tsne,
-        &group_of,
-        &groups,
-    )
-    .map_err(|e| anyhow::anyhow!("rendering t-SNE: {e}"))?;
-    println!("wrote {}", tsne_path.display());
+        &cat_of,
+        &cat_groups,
+    )?;
+    write(
+        with_suffix(&args.out, "-tsne-keywords.svg"),
+        "t-SNE (color: keyword)",
+        "t-SNE 1",
+        "t-SNE 2",
+        &tsne,
+        &kw_of,
+        &kw_groups,
+    )?;
+
+    // Per-feature heatmaps over the t-SNE layout: where each input feature is
+    // high/low, which shows what actually drives the embedding.
+    let feat_path = with_suffix(&args.out, "-features.svg");
+    feature_heatmaps(&feat_path, &tsne, &raw)
+        .map_err(|e| anyhow::anyhow!("rendering heatmaps: {e}"))?;
+    println!("wrote {}", feat_path.display());
     Ok(())
 }
 
@@ -451,6 +456,89 @@ fn scatter(
         .draw()?;
     root.present()?;
     Ok(())
+}
+
+/// Renders one small heatmap panel per feature over the t-SNE layout, each point
+/// colored by that (standardized) feature's value, so it is clear which input
+/// features the embedding is laid out by. Points are strided to a cap to keep
+/// the SVG a sane size.
+fn feature_heatmaps(
+    path: &std::path::Path,
+    coords: &[(f64, f64)],
+    feats: &[Vec<f64>],
+) -> std::result::Result<(), Box<dyn Error>> {
+    let step = coords.len().div_ceil(6000).max(1);
+    let idx: Vec<usize> = (0..coords.len()).step_by(step).collect();
+    let xs: Vec<f64> = idx.iter().map(|&i| coords[i].0).collect();
+    let ys: Vec<f64> = idx.iter().map(|&i| coords[i].1).collect();
+    let (xlo, xhi) = (
+        xs.iter().cloned().fold(f64::INFINITY, f64::min),
+        xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+    );
+    let (ylo, yhi) = (
+        ys.iter().cloned().fold(f64::INFINITY, f64::min),
+        ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+    );
+
+    let cols = 5;
+    let rows = FEATURES.len().div_ceil(cols);
+    let root = SVGBackend::new(path, (1800, 360 * rows as u32)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let panels = root.split_evenly((rows, cols));
+    for (j, panel) in (0..FEATURES.len()).zip(panels.iter()) {
+        // Robust color range: 2nd-98th percentile of this feature.
+        let mut vals: Vec<f64> = idx.iter().map(|&i| feats[i][j]).collect();
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let (lo, hi) = (percentile(&vals, 0.02), percentile(&vals, 0.98));
+        let span = if hi > lo { hi - lo } else { 1.0 };
+        let mut chart = ChartBuilder::on(panel)
+            .caption(FEATURES[j], ("sans-serif", 15))
+            .margin(4)
+            .build_cartesian_2d(xlo..xhi, ylo..yhi)?;
+        chart
+            .configure_mesh()
+            .disable_mesh()
+            .disable_axes()
+            .draw()?;
+        chart.draw_series(idx.iter().map(|&i| {
+            let t = ((feats[i][j] - lo) / span).clamp(0.0, 1.0);
+            Circle::new(coords[i], 1, viridis(t).filled())
+        }))?;
+    }
+    root.present()?;
+    Ok(())
+}
+
+/// The value at percentile `p` of an ascending-sorted slice.
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
+/// Viridis colormap: maps `t in [0,1]` to a perceptually-uniform color.
+fn viridis(t: f64) -> RGBColor {
+    const STOPS: [(f64, (u8, u8, u8)); 5] = [
+        (0.0, (68, 1, 84)),
+        (0.25, (59, 82, 139)),
+        (0.5, (33, 145, 140)),
+        (0.75, (94, 201, 98)),
+        (1.0, (253, 231, 37)),
+    ];
+    let t = t.clamp(0.0, 1.0);
+    for w in STOPS.windows(2) {
+        let (t0, c0) = w[0];
+        let (t1, c1) = w[1];
+        if t <= t1 {
+            let f = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
+            let lerp = |a: u8, b: u8| (f64::from(a) + f * (f64::from(b) - f64::from(a))) as u8;
+            return RGBColor(lerp(c0.0, c1.0), lerp(c0.1, c1.1), lerp(c0.2, c1.2));
+        }
+    }
+    let (_, c) = STOPS[STOPS.len() - 1];
+    RGBColor(c.0, c.1, c.2)
 }
 
 /// Appends a suffix to a path's file name (`plots/embed` + `-pca.svg`).
