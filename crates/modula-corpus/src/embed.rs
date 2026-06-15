@@ -241,23 +241,32 @@ fn label_of(e: &Extraction, color_by: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Standardizes each column to zero mean / unit variance in place, imputing
-/// `NaN` to the column mean (which becomes 0 after centering).
+/// Robustly scales each column in place: winsorize to the 1st-99th percentile,
+/// impute missing to the median, then center on the median and scale by the IQR.
+/// Median/IQR (rather than mean/std) keeps the heavy tails here (e.g. cyclomatic
+/// up to 12k) from stretching an axis and compressing everything else. A column
+/// with no inter-quartile spread contributes nothing (scaled to 0).
 fn standardize(data: &mut [Vec<f64>]) {
     let d = data[0].len();
     for j in 0..d {
-        let present: Vec<f64> = data
+        let mut col: Vec<f64> = data
             .iter()
             .filter_map(|r| r[j].is_finite().then_some(r[j]))
             .collect();
-        let n = present.len().max(1) as f64;
-        let mean = present.iter().sum::<f64>() / n;
-        let var = present.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
-        let std = var.sqrt();
-        let scale = if std > 1e-12 { 1.0 / std } else { 0.0 };
+        if col.is_empty() {
+            for row in data.iter_mut() {
+                row[j] = 0.0;
+            }
+            continue;
+        }
+        col.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = percentile(&col, 0.5);
+        let iqr = percentile(&col, 0.75) - percentile(&col, 0.25);
+        let (wlo, whi) = (percentile(&col, 0.01), percentile(&col, 0.99));
+        let scale = if iqr > 1e-12 { 1.0 / iqr } else { 0.0 };
         for row in data.iter_mut() {
-            let v = if row[j].is_finite() { row[j] } else { mean };
-            row[j] = (v - mean) * scale;
+            let v = if row[j].is_finite() { row[j] } else { median };
+            row[j] = (v.clamp(wlo, whi) - median) * scale;
         }
     }
 }
