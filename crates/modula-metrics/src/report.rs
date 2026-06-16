@@ -145,23 +145,21 @@ pub fn to_human(result: &AnalysisResult) -> String {
         let _ = writeln!(s);
     }
 
-    // Tangles.
+    // Tangle: feedback references that prevent the module graph from laying in
+    // a clean dependency order. Listing them is the actionable "cut these" set.
     if result.tangles.is_acyclic {
-        let _ = writeln!(s, "Cycles: none (module graph is acyclic)");
+        let _ = writeln!(s, "Tangle: none (module graph is a clean DAG)");
     } else {
         let _ = writeln!(
             s,
-            "Cycles: {} tangle(s), largest {} modules, {} independent cycle(s)",
-            result.tangles.sccs.len(),
-            result.tangles.largest_scc,
-            result.tangles.cyclomatic_number
+            "Tangle: {:.1}% of inter-module dependency weight is feedback ({} reference(s) to cut to layer it):",
+            result.tangles.feedback_fraction * 100.0,
+            result.tangles.feedback_edges.len(),
         );
-        for scc in result.tangles.sccs.iter().take(5) {
-            let names: Vec<&str> = scc
-                .iter()
-                .map(|m| *module_path.get(m).unwrap_or(&"?"))
-                .collect();
-            let _ = writeln!(s, "  {}", names.join(" <-> "));
+        for (from, to) in result.tangles.feedback_edges.iter().take(5) {
+            let from = module_path.get(from).unwrap_or(&"?");
+            let to = module_path.get(to).unwrap_or(&"?");
+            let _ = writeln!(s, "  {from} -> {to}");
         }
     }
     let _ = writeln!(s);
@@ -273,6 +271,12 @@ mod tests {
                 is_acyclic,
                 largest_scc: usize::from(sccs != 0),
                 cyclomatic_number: sccs,
+                feedback_fraction: if is_acyclic { 0.0 } else { 0.5 },
+                feedback_edges: if is_acyclic {
+                    Vec::new()
+                } else {
+                    vec![(ModuleId(0), ModuleId(1))]
+                },
             },
             encapsulation: EncapsulationReport {
                 over_exposed: Vec::new(),
@@ -350,7 +354,7 @@ mod tests {
     fn human_report_clean_graph_says_acyclic_and_none() {
         let text = to_human(&bare(0.7, true, 0, 0.0));
         assert!(text.contains("Modularity report for crate `demo`"));
-        assert!(text.contains("Cycles: none"));
+        assert!(text.contains("Tangle: none"));
         assert!(text.contains("Over-exposed items: none"));
         assert!(text.contains("Leaks (cross-module references into internals): none"));
     }
@@ -411,7 +415,7 @@ mod tests {
         let text = to_human(&r);
         assert!(text.contains("Leakiest modules"));
         assert!(text.contains("demo::a"));
-        assert!(text.contains("tangle(s)"));
+        assert!(text.contains("reference(s) to cut to layer it"));
         assert!(text.contains("Over-exposed items (1)"));
         assert!(text.contains("Leaks (cross-module references into internals"));
         // `efficiency_directed: None` exercises the `n/a` branch of `opt`.

@@ -101,7 +101,6 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
         &modularity_profile,
         &divergence_profile,
         &tangles,
-        n_module_nodes,
         &encapsulation,
         &config.composite,
     );

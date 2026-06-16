@@ -16,7 +16,7 @@ Leakiest modules (cohesion | Ca | Ce | instability):
   k::a                         0.923 |  0 |  1 | 1.000
   k::b                         0.923 |  1 |  0 | 0.000
 
-Cycles: none (module graph is acyclic)
+Tangle: none (module graph is a clean DAG)
 
 Over-exposed items (8):
   k::item0                         Crate -> Private

@@ -50,7 +50,9 @@ pub struct CompositeScore {
     /// Divergence term (AMI at the primary depth); `None` when there is no
     /// primary depth to measure against.
     pub divergence_term: Option<f64>,
-    /// Acyclicity term: fraction of module nodes not in any tangle.
+    /// Acyclicity term in `[0, 1]`: `1 - 2 * feedback_fraction` (the feedback
+    /// fraction is bounded at `0.5`, so this rescaling uses the full range). `1`
+    /// for a clean layerable DAG, `0` for a maximally tangled module graph.
     pub acyclicity_term: f64,
     /// Encapsulation term: blend of over-exposure and leak depth.
     pub encapsulation_term: f64,
@@ -64,11 +66,10 @@ pub fn composite_score(
     modularity: &[DepthRecord],
     divergence: &[DivergenceRecord],
     tangles: &TangleReport,
-    n_module_nodes: usize,
     encapsulation: &EncapsulationReport,
     weights: &CompositeWeights,
 ) -> CompositeScore {
-    let acyclicity_term = acyclicity(tangles, n_module_nodes);
+    let acyclicity_term = acyclicity(tangles);
     let encapsulation_term = encapsulation_term(encapsulation);
 
     // Primary depth: the finest declared layer that still has more than one
@@ -129,13 +130,15 @@ pub fn composite_score(
     }
 }
 
-/// Fraction of module nodes not involved in any non-trivial cycle.
-fn acyclicity(tangles: &TangleReport, n_module_nodes: usize) -> f64 {
-    if n_module_nodes == 0 {
-        return 1.0;
-    }
-    let in_cycles: usize = tangles.sccs.iter().map(Vec::len).sum();
-    1.0 - in_cycles as f64 / n_module_nodes as f64
+/// Distance-from-DAG acyclicity, in `[0, 1]`. A clean (layerable) module graph
+/// scores `1`; a maximally tangled one scores `0`. Shared sinks contribute no
+/// feedback, so a widely-used foundation module is not penalized.
+///
+/// The feedback fraction is bounded at `0.5` (any vertex order or its reverse
+/// keeps at least half the edge weight forward, so the minimum feedback set is
+/// at most half), so we rescale by that bound to use the whole `[0, 1]` range.
+fn acyclicity(tangles: &TangleReport) -> f64 {
+    (1.0 - 2.0 * tangles.feedback_fraction).clamp(0.0, 1.0)
 }
 
 /// Blend of over-exposure and leak depth, both in `[0, 1]`.
@@ -229,17 +232,24 @@ mod unit_tests {
     }
 
     #[test]
-    fn acyclicity_is_fraction_of_nodes_outside_cycles() {
-        let tangles = TangleReport {
+    fn acyclicity_is_one_minus_feedback_fraction() {
+        let mut tangles = TangleReport {
             sccs: vec![vec![ModuleId(0), ModuleId(1)]],
             is_acyclic: false,
             largest_scc: 2,
             cyclomatic_number: 1,
+            feedback_fraction: 0.25,
+            feedback_edges: vec![(ModuleId(1), ModuleId(0))],
         };
-        // 2 of 4 nodes in cycles -> 1 - 2/4 = 0.5.
-        assert!((acyclicity(&tangles, 4) - 0.5).abs() < 1e-12);
-        // No module nodes -> perfectly acyclic.
-        assert_eq!(acyclicity(&tangles, 0), 1.0);
+        // 25% of dependency weight is feedback -> 1 - 2*0.25 = 0.5 acyclicity.
+        assert!((acyclicity(&tangles) - 0.5).abs() < 1e-12);
+        // A clean DAG (no feedback) scores a perfect 1.0.
+        tangles.feedback_fraction = 0.0;
+        tangles.feedback_edges.clear();
+        assert_eq!(acyclicity(&tangles), 1.0);
+        // The feedback fraction caps at 0.5 (a pure 2-cycle), which maps to 0.0.
+        tangles.feedback_fraction = 0.5;
+        assert_eq!(acyclicity(&tangles), 0.0);
     }
 
     #[test]
