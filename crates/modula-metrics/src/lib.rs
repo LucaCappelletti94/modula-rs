@@ -8,12 +8,11 @@
 #![forbid(unsafe_code)]
 
 pub mod analysis;
+pub mod cohesion;
 pub mod coupling;
 pub mod cycles;
-pub mod divergence;
 pub mod encapsulation;
 pub mod graph;
-pub mod modularity;
 pub mod module_graph;
 pub mod report;
 pub mod score;

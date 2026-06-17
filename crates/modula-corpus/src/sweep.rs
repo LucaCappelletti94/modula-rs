@@ -95,9 +95,7 @@ fn fill(row: &mut Analysis, a: &AnalysisResult) {
     let c = &a.composite;
     row.status = "ok".to_owned();
     row.headline = c.headline;
-    row.headline_depth_averaged = c.headline_depth_averaged;
-    row.modularity_term = c.modularity_term;
-    row.divergence_term = c.divergence_term;
+    row.cohesion_term = c.cohesion_term;
     row.acyclicity_term = Some(c.acyclicity_term);
     row.encapsulation_term = Some(c.encapsulation_term);
     row.is_acyclic = Some(i32::from(a.tangles.is_acyclic));
@@ -147,10 +145,9 @@ fn median_opt(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
 
 /// Flags non-finite or out-of-`[0,1]` metric terms (the calibration bug hunt).
 fn anomalies(row: &Analysis) -> Option<String> {
-    let terms: [(&str, Option<f64>); 7] = [
+    let terms: [(&str, Option<f64>); 6] = [
         ("headline", row.headline),
-        ("modularity_term", row.modularity_term),
-        ("divergence_term", row.divergence_term),
+        ("cohesion_term", row.cohesion_term),
         ("acyclicity_term", row.acyclicity_term),
         ("encapsulation_term", row.encapsulation_term),
         ("over_exposed_fraction", row.over_exposed_fraction),
@@ -175,9 +172,7 @@ fn blank(e: &Extraction) -> Analysis {
         version: e.version.clone(),
         status: "error".to_owned(),
         headline: None,
-        headline_depth_averaged: None,
-        modularity_term: None,
-        divergence_term: None,
+        cohesion_term: None,
         acyclicity_term: None,
         encapsulation_term: None,
         is_acyclic: None,
@@ -215,9 +210,7 @@ mod tests {
             version: "1".to_owned(),
             status: "ok".to_owned(),
             headline: None,
-            headline_depth_averaged: None,
-            modularity_term: None,
-            divergence_term: None,
+            cohesion_term: None,
             acyclicity_term: None,
             encapsulation_term: None,
             is_acyclic: None,
@@ -247,19 +240,19 @@ mod tests {
         let mut r = row();
         r.headline = Some(0.5);
         r.acyclicity_term = Some(1.0);
-        r.modularity_term = Some(0.0);
+        r.cohesion_term = Some(0.0);
         assert_eq!(anomalies(&r), None);
     }
 
     #[test]
     fn out_of_range_and_nonfinite_are_flagged() {
         let mut r = row();
-        r.modularity_term = Some(1.5);
-        assert_eq!(anomalies(&r).as_deref(), Some("modularity_term=1.500_oob"));
+        r.cohesion_term = Some(1.5);
+        assert_eq!(anomalies(&r).as_deref(), Some("cohesion_term=1.500_oob"));
 
         let mut r = row();
-        r.divergence_term = Some(f64::NAN);
-        assert_eq!(anomalies(&r).as_deref(), Some("divergence_term=nonfinite"));
+        r.acyclicity_term = Some(f64::NAN);
+        assert_eq!(anomalies(&r).as_deref(), Some("acyclicity_term=nonfinite"));
     }
 
     #[test]

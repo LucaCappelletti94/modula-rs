@@ -29,9 +29,8 @@ pub struct EmbedArgs {
 }
 
 /// The z-scored features, in order. Used for PCA loading readouts.
-const FEATURES: [&str; 18] = [
-    "modularity",
-    "divergence",
+const FEATURES: [&str; 17] = [
+    "cohesion",
     "acyclicity",
     "encapsulation",
     "over_exposed",
@@ -276,8 +275,7 @@ fn features(a: &Analysis, e: &Extraction) -> Vec<f64> {
         nan
     };
     vec![
-        a.modularity_term.unwrap_or(nan),
-        a.divergence_term.unwrap_or(nan),
+        a.cohesion_term.unwrap_or(nan),
         a.acyclicity_term.unwrap_or(nan),
         a.encapsulation_term.unwrap_or(nan),
         a.over_exposed_fraction.unwrap_or(nan),
@@ -769,10 +767,9 @@ fn confounder_report(rows: &[Analysis], exts: &HashMap<(String, String), Extract
     /// Named accessor for one scalar metric of an analysis row.
     type MetricFn = fn(&Analysis) -> Option<f64>;
     let now_ref = exts.values().filter_map(|e| e.released_at).max();
-    let metrics: [(&str, MetricFn); 7] = [
+    let metrics: [(&str, MetricFn); 6] = [
         ("headline", |a| a.headline),
-        ("modularity_term", |a| a.modularity_term),
-        ("divergence_term", |a| a.divergence_term),
+        ("cohesion_term", |a| a.cohesion_term),
         ("acyclicity_term", |a| a.acyclicity_term),
         ("encapsulation_term", |a| a.encapsulation_term),
         ("over_exposed_fraction", |a| a.over_exposed_fraction),

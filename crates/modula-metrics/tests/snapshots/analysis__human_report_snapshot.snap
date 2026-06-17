@@ -5,10 +5,8 @@ expression: to_human(&result)
 Modularity report for crate `k`
   8 items, 3 modules (2 in the dependency graph)
 
-Headline score: 0.800 / 1.000
-  depth-averaged : 0.800
-  modularity     : 1.000
-  divergence     : 1.000
+Headline score: 0.758 / 1.000
+  cohesion       : 0.930
   acyclicity     : 1.000
   encapsulation  : 0.000
 
@@ -27,11 +25,3 @@ Over-exposed items (8):
 
 Leaks (cross-module references into internals, 1 of 1 cross-module refs):
   k::item3 -> k::item4 (Crate)
-
-Modularity profile (depth: declared/detected Q, efficiency):
-  d0 c1   U   0.000/  0.460 e 0.000  D  -0.000/  0.461 e 0.000
-  d1 c2   U   0.460/  0.460 e 1.000  D   0.461/  0.461 e 1.000
-
-Divergence profile (depth: VI, AMI, ARI):
-  d0 VI   0.693 AMI   0.000 ARI   0.000
-  d1 VI   0.000 AMI   1.000 ARI   1.000

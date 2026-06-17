@@ -72,7 +72,7 @@ fn cyclic_module_graph_lowers_acyclicity() {
 }
 
 #[test]
-fn type_level_gives_a_flat_crate_a_partition() {
+fn flat_single_module_crate_has_na_headline() {
     use modula_ir::{Edge, Item, ItemId, ItemKind, RefKind};
     // A single `mod` (the crate root) with two type containers Foo and Bar, each
     // owning a struct + a method. Without the type level this would be one
@@ -129,16 +129,12 @@ fn type_level_gives_a_flat_crate_a_partition() {
         edges: vec![body(1, 0), body(3, 2), body(3, 1)],
     };
     let result = analyze(&ir, &AnalysisConfig::default()).unwrap();
-    // The crate is one real module, but the type depth yields >= 2 communities,
-    // so the partition is no longer trivial.
+    // Cohesion is measured at the real-module level (type containers roll up to
+    // their `mod`), so a single-`mod` crate has no partition to score: cohesion
+    // and the headline are N/A rather than a vacuous number.
     assert_eq!(result.n_module_nodes, 1, "one real module");
-    assert!(
-        result
-            .modularity_profile
-            .iter()
-            .any(|r| r.communities_declared >= 2),
-        "the type level must give a non-trivial partition"
-    );
+    assert!(result.composite.cohesion_term.is_none());
+    assert!(result.composite.headline.is_none());
 }
 
 #[test]
@@ -223,8 +219,6 @@ fn empty_crate_is_handled() {
     let result = analyze(&empty_crate(), &AnalysisConfig::default()).unwrap();
     assert_eq!(result.n_items, 0);
     assert_eq!(result.n_real_items, 0);
-    assert!(result.modularity_profile.is_empty());
-    assert!(result.divergence_profile.is_empty());
     assert!(result.tangles.is_acyclic);
     // No measurable structure: the headline is N/A, not a vacuous number.
     assert!(result.composite.headline.is_none());
@@ -236,7 +230,7 @@ fn json_and_human_outputs_render() {
 
     let json = to_json(&result).unwrap();
     assert!(json.contains("\"headline\""));
-    assert!(json.contains("\"modularity_profile\""));
+    assert!(json.contains("\"cohesion_term\""));
 
     let human = to_human(&result);
     assert!(human.contains("Headline score"));

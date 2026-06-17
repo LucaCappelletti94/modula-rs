@@ -20,10 +20,9 @@ pub struct PlotArgs {
 
 type Field = fn(&Analysis) -> Option<f64>;
 
-const METRICS: [(&str, Field); 7] = [
+const METRICS: [(&str, Field); 6] = [
     ("headline", |a| a.headline),
-    ("modularity_term", |a| a.modularity_term),
-    ("divergence_term", |a| a.divergence_term),
+    ("cohesion_term", |a| a.cohesion_term),
     ("acyclicity_term", |a| a.acyclicity_term),
     ("encapsulation_term", |a| a.encapsulation_term),
     ("over_exposed_fraction", |a| a.over_exposed_fraction),

@@ -4,11 +4,10 @@
 use modula_ir::CrateGraph;
 use serde::Serialize;
 
+use crate::cohesion::cohesion_lift;
 use crate::coupling::{ModuleCoupling, module_coupling};
 use crate::cycles::{TangleReport, tangles};
 use crate::encapsulation::{EncapsulationReport, encapsulation};
-use crate::graph::build_item_graphs;
-use crate::modularity::{DepthRecord, DivergenceRecord, ModularityConfig, profiles};
 use crate::module_graph::ModuleAggregation;
 use crate::score::{CompositeScore, CompositeWeights, composite_score};
 use crate::weighting::RefKindWeights;
@@ -18,8 +17,6 @@ use crate::weighting::RefKindWeights;
 pub struct AnalysisConfig {
     /// Edge weighting policy.
     pub weights: RefKindWeights,
-    /// Modularity / detector configuration.
-    pub modularity: ModularityConfig,
     /// Composite-score weights.
     pub composite: CompositeWeights,
 }
@@ -30,15 +27,6 @@ pub enum AnalysisError {
     /// A graph could not be built.
     #[error(transparent)]
     Graph(#[from] crate::graph::GraphError),
-    /// Modularity scoring or detection failed.
-    #[error("modularity analysis failed: {0:?}")]
-    Modularity(geometric_traits::traits::algorithms::ModularityError),
-}
-
-impl From<geometric_traits::traits::algorithms::ModularityError> for AnalysisError {
-    fn from(error: geometric_traits::traits::algorithms::ModularityError) -> Self {
-        AnalysisError::Modularity(error)
-    }
 }
 
 /// The complete analysis of a crate graph.
@@ -57,10 +45,6 @@ pub struct AnalysisResult {
     pub n_modules: usize,
     /// Number of module nodes in the dependency graph (modules owning items).
     pub n_module_nodes: usize,
-    /// Modularity efficiency profile over depth.
-    pub modularity_profile: Vec<DepthRecord>,
-    /// Divergence profile over depth.
-    pub divergence_profile: Vec<DivergenceRecord>,
     /// Per-module coupling and cohesion.
     pub modules: Vec<ModuleCoupling>,
     /// Module dependency cycles.
@@ -86,24 +70,9 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
     let modules = module_coupling(ir, &agg);
     let tangles = tangles(&agg)?;
     let encapsulation = encapsulation(ir);
+    let cohesion = cohesion_lift(ir, &agg);
 
-    // Modularity and divergence need the item graphs; a crate with no real
-    // items (empty, or a pure module-stub facade) has none.
-    let (modularity_profile, divergence_profile) = if n_real_items == 0 {
-        (Vec::new(), Vec::new())
-    } else {
-        let graphs = build_item_graphs(ir, &config.weights)?;
-        let p = profiles(ir, &graphs, &config.modularity)?;
-        (p.modularity, p.divergence)
-    };
-
-    let composite = composite_score(
-        &modularity_profile,
-        &divergence_profile,
-        &tangles,
-        &encapsulation,
-        &config.composite,
-    );
+    let composite = composite_score(cohesion, &tangles, &encapsulation, &config.composite);
 
     Ok(AnalysisResult {
         crate_name,
@@ -111,26 +80,9 @@ pub fn analyze(ir: &CrateGraph, config: &AnalysisConfig) -> Result<AnalysisResul
         n_real_items,
         n_modules,
         n_module_nodes,
-        modularity_profile,
-        divergence_profile,
         modules,
         tangles,
         encapsulation,
         composite,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::AnalysisError;
-
-    #[test]
-    fn modularity_error_converts_into_analysis_error() {
-        // The manual `From<ModularityError>` is what `?` uses when the detector
-        // rejects an input; exercise it directly so it does not rely on a
-        // contrived detector failure.
-        use geometric_traits::traits::algorithms::ModularityError;
-        let err: AnalysisError = ModularityError::InvalidResolution.into();
-        assert!(matches!(err, AnalysisError::Modularity(_)));
-    }
 }

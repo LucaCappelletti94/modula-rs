@@ -107,13 +107,7 @@ pub fn to_human(result: &AnalysisResult) -> String {
 
     let c = &result.composite;
     let _ = writeln!(s, "Headline score: {:>5} / 1.000", opt(c.headline));
-    let _ = writeln!(
-        s,
-        "  depth-averaged : {:>5}",
-        opt(c.headline_depth_averaged)
-    );
-    let _ = writeln!(s, "  modularity     : {:>5}", opt(c.modularity_term));
-    let _ = writeln!(s, "  divergence     : {:>5}", opt(c.divergence_term));
+    let _ = writeln!(s, "  cohesion       : {:>5}", opt(c.cohesion_term));
     let _ = writeln!(s, "  acyclicity     : {:.3}", c.acyclicity_term);
     let _ = writeln!(s, "  encapsulation  : {:.3}", c.encapsulation_term);
     let _ = writeln!(s);
@@ -199,37 +193,6 @@ pub fn to_human(result: &AnalysisResult) -> String {
     }
     let _ = writeln!(s);
 
-    // Modularity profile.
-    let _ = writeln!(
-        s,
-        "Modularity profile (depth: declared/detected Q, efficiency):"
-    );
-    for r in &result.modularity_profile {
-        let _ = writeln!(
-            s,
-            "  d{} c{:<3} U {:>7.3}/{:>7.3} e {:>5}  D {:>7.3}/{:>7.3} e {:>5}",
-            r.depth,
-            r.communities_declared,
-            r.q_declared_undirected,
-            r.q_detected_undirected,
-            opt(r.efficiency_undirected),
-            r.q_declared_directed,
-            r.q_detected_directed,
-            opt(r.efficiency_directed),
-        );
-    }
-    let _ = writeln!(s);
-
-    // Divergence profile.
-    let _ = writeln!(s, "Divergence profile (depth: VI, AMI, ARI):");
-    for r in &result.divergence_profile {
-        let _ = writeln!(
-            s,
-            "  d{} VI {:>7.3} AMI {:>7.3} ARI {:>7.3}",
-            r.depth, r.vi, r.ami, r.ari
-        );
-    }
-
     s
 }
 
@@ -245,7 +208,6 @@ mod tests {
     use crate::coupling::ModuleCoupling;
     use crate::cycles::TangleReport;
     use crate::encapsulation::{EncapsulationReport, Leak, OverExposure};
-    use crate::modularity::{DepthRecord, DivergenceRecord};
     use crate::score::{CompositeScore, CompositeWeights};
     use modula_ir::{ItemId, ModuleId, Visibility};
 
@@ -263,8 +225,6 @@ mod tests {
             n_real_items: 1,
             n_modules: 1,
             n_module_nodes: 1,
-            modularity_profile: Vec::new(),
-            divergence_profile: Vec::new(),
             modules: Vec::new(),
             tangles: TangleReport {
                 sccs: vec![vec![ModuleId(0)]; sccs],
@@ -287,9 +247,7 @@ mod tests {
             },
             composite: CompositeScore {
                 headline: Some(headline),
-                headline_depth_averaged: Some(headline),
-                modularity_term: None,
-                divergence_term: Some(0.0),
+                cohesion_term: Some(0.5),
                 acyclicity_term: 0.0,
                 encapsulation_term: 0.0,
                 weights: CompositeWeights::default(),
@@ -392,34 +350,12 @@ mod tests {
             target_visibility: Visibility::Crate,
         }];
         r.encapsulation.n_cross_module_refs = 3;
-        r.modularity_profile = vec![DepthRecord {
-            depth: 1,
-            communities_declared: 2,
-            q_declared_undirected: 0.1,
-            q_declared_directed: 0.2,
-            q_detected_undirected: 0.3,
-            q_detected_directed: 0.4,
-            efficiency_undirected: Some(0.5),
-            efficiency_directed: None,
-        }];
-        r.divergence_profile = vec![DivergenceRecord {
-            depth: 1,
-            vi: 1.0,
-            vi_normalized: 0.5,
-            nmi: 0.5,
-            ami: 0.4,
-            ari: 0.3,
-            h_declared_given_detected: 0.2,
-            h_detected_given_declared: 0.1,
-        }];
         let text = to_human(&r);
         assert!(text.contains("Leakiest modules"));
         assert!(text.contains("demo::a"));
         assert!(text.contains("reference(s) to cut to layer it"));
         assert!(text.contains("Over-exposed items (1)"));
         assert!(text.contains("Leaks (cross-module references into internals"));
-        // `efficiency_directed: None` exercises the `n/a` branch of `opt`.
-        assert!(text.contains("n/a"));
     }
 
     #[test]
