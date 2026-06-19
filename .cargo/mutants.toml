@@ -16,30 +16,13 @@ test_workspace = false
 # mutants that no input can distinguish; genuinely killable survivors are tested
 # instead of excluded.
 exclude_re = [
-    # Numeric epsilon / boundary guards: the compared quantity never lands
-    # exactly on the bound, so `<` vs `<=` (or `>` vs `>=`) is unobservable.
-    "replace < with (==|<=) in Contingency::expected_mutual_information",
-    "replace < with (==|<=) in Contingency::ami",
-    "replace < with (==|<=) in Contingency::ari",
-    # ARI denominator-near-zero guard (max_index - expected): only fires for a
-    # degenerate contingency the partitions never produce. The formula itself
-    # (line 250) is pinned by the orthogonal-ARI test.
-    "divergence.rs:247:23:",
-    "replace (&&|>) with (\\|\\||>=) in Contingency::both_singletons",
+    # `pub(crate)` vs `pub(super)` boundary: tightening this guard depends on a
+    # same-crate consumer nesting that the unit fixtures do not exercise in
+    # isolation; the distinction is covered by the encapsulation integration tests.
     "replace > with >= in required_visibility",
-    "replace > with >= in directed_arcs",
-    "replace > with >= in composite_score",
-    "replace && with \\|\\| in tangles",
-    # The `Super` vs `Crate` distinction here depends on a same-crate consumer
-    # nesting the detectors never exercise in isolation; covered end to end.
     "replace match guard is_within_subtree.* with true in needed_visibility",
-    # (The `resolution` field-deletion mutants in undirected_levels/directed_levels
-    # are handled with #[cfg_attr(test, mutants::skip)] in the source, because
-    # field-deletion mutants are not matched by exclude_re.)
-    # Thin getter over geometric-traits detector output; its contents are pinned
-    # by the modularity integration tests, not this accessor.
-    "DetectorLevel for LouvainLevel<usize>>::partition",
-    # Mean over leak costs: arithmetic exercised structurally by the encapsulation
-    # integration tests; not worth a bespoke multi-leak unit fixture.
-    "replace / with \\* in leaks",
+    # Cyclomatic edge-membership guard: both endpoints of a counted edge are in
+    # the SCC by construction, so `&&` vs `||` over the two membership tests is
+    # unobservable.
+    "replace && with \\|\\| in tangles",
 ]

@@ -197,6 +197,15 @@ mod tests {
     }
 
     #[test]
+    fn modules_without_dependencies_have_no_cohesion() {
+        // Two modules holding items but with no edges at all: no module has any
+        // outgoing activity, so there is no cohesion signal and the result is
+        // N/A, not a spurious score (and never `Some(NaN)` from a 0/0 average).
+        let ir = build(3, &[(1, &[]), (1, &[]), (2, &[]), (2, &[])]);
+        assert_eq!(lift(&ir), None);
+    }
+
+    #[test]
     fn scrambled_boundaries_score_low() {
         // Items that all reference across module lines (no internal cohesion):
         // the declared partition does no better than chance, so lift is ~0.
