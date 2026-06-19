@@ -22,3 +22,6 @@ target
 
 # Working notes, not part of the repo
 notes/
+
+# Playwright MCP scratch output
+.playwright-mcp/
