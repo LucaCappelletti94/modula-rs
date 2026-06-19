@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# `modula-corpus` is heavy internal tooling (diesel, plotters, an HTTP/TLS stack)
+# that the shipped crates do not depend on. Keep it out of the default build so
+# routine `cargo build`/`cargo test` stay fast; `--workspace` (and the cargo
+# deny / audit gates) still cover it.
+default-members = [
+    "crates/modula-ir",
+    "crates/modula-extract",
+    "crates/modula-metrics",
+    "crates/cargo-modula",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Dictated by the rust-analyzer (`ra_ap_*`) crates, which require Rust 1.95.
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/LucaCappelletti94/modula-rs"
+authors = ["Luca Cappelletti <cappelletti.luca94@gmail.com>"]
+
+[workspace.dependencies]
+# Internal crates
+modula-ir = { path = "crates/modula-ir" }
+modula-extract = { path = "crates/modula-extract" }
+modula-metrics = { path = "crates/modula-metrics" }
+
+# Graph backend
+geometric-traits = { git = "https://github.com/earth-metabolome-initiative/geometric-traits", branch = "main", features = ["alloc"] }
+
+# Shared third-party
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+# Dev
+insta = { version = "1", features = ["json"] }
+proptest = "1"
+approx = "0.5"

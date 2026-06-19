@@ -1,0 +1,28 @@
+# cargo-mutants configuration.
+#
+# Only the pure crates (modula-ir, modula-metrics) are mutation-tested. The
+# rust-analyzer extractor (modula-extract) and the CLI (cargo-modula) have their
+# meaningful tests marked #[ignore] - each run costs a full rust-analyzer build
+# plus a live extraction - so mutating them is infeasible and every mutant would
+# falsely survive.
+examine_globs = ["crates/modula-ir/**/*.rs", "crates/modula-metrics/**/*.rs"]
+
+# Test each mutant against only the package it lives in, so a mutation never
+# forces a rebuild of the heavy ra_ap_* dependency tree.
+test_workspace = false
+
+# Known-acceptable survivors. Each entry is a regex matched against the mutant
+# description from `cargo mutants --list`. These are equivalent or near-equivalent
+# mutants that no input can distinguish; genuinely killable survivors are tested
+# instead of excluded.
+exclude_re = [
+    # `pub(crate)` vs `pub(super)` boundary: tightening this guard depends on a
+    # same-crate consumer nesting that the unit fixtures do not exercise in
+    # isolation; the distinction is covered by the encapsulation integration tests.
+    "replace > with >= in required_visibility",
+    "replace match guard is_within_subtree.* with true in needed_visibility",
+    # Cyclomatic edge-membership guard: both endpoints of a counted edge are in
+    # the SCC by construction, so `&&` vs `||` over the two membership tests is
+    # unobservable.
+    "replace && with \\|\\| in tangles",
+]

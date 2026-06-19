@@ -1,0 +1,156 @@
+---
+source: crates/modula-extract/tests/spike.rs
+expression: normalized(&graph)
+---
+{
+  "edges": [
+    {
+      "from": "rich::logic",
+      "kind": "Import",
+      "to": "rich::types::Greet",
+      "weight": 1
+    },
+    {
+      "from": "rich::logic",
+      "kind": "Import",
+      "to": "rich::types::Outer",
+      "weight": 1
+    },
+    {
+      "from": "rich::logic::Outer::greet",
+      "kind": "Body",
+      "to": "rich::logic::Outer::helper",
+      "weight": 1
+    },
+    {
+      "from": "rich::logic::run",
+      "kind": "Body",
+      "to": "rich::logic::Outer::greet",
+      "weight": 1
+    },
+    {
+      "from": "rich::logic::run",
+      "kind": "Signature",
+      "to": "rich::types::Outer",
+      "weight": 1
+    },
+    {
+      "from": "rich::types::Outer",
+      "kind": "Impl",
+      "to": "rich::types::Greet",
+      "weight": 1
+    },
+    {
+      "from": "rich::types::Outer",
+      "kind": "Signature",
+      "to": "rich::types::Inner",
+      "weight": 1
+    }
+  ],
+  "items": [
+    {
+      "kind": "Module",
+      "owning_module": "rich",
+      "path": "rich",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Module",
+      "owning_module": "rich::logic",
+      "path": "rich::logic",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "rich::types::Outer",
+      "path": "rich::logic::Outer::greet",
+      "visibility": "Private"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "rich::types::Outer",
+      "path": "rich::logic::Outer::helper",
+      "visibility": "Private"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "rich::logic",
+      "path": "rich::logic::run",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Module",
+      "owning_module": "rich::types",
+      "path": "rich::types",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Trait",
+      "owning_module": "rich::types::Greet",
+      "path": "rich::types::Greet",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Function",
+      "owning_module": "rich::types::Greet",
+      "path": "rich::types::Greet::greet",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Struct",
+      "owning_module": "rich::types::Inner",
+      "path": "rich::types::Inner",
+      "visibility": "Public"
+    },
+    {
+      "kind": "Struct",
+      "owning_module": "rich::types::Outer",
+      "path": "rich::types::Outer",
+      "visibility": "Public"
+    }
+  ],
+  "modules": [
+    {
+      "depth": 0,
+      "kind": "Mod",
+      "parent": null,
+      "path": "rich",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "kind": "Mod",
+      "parent": "rich",
+      "path": "rich::logic",
+      "visibility": "Public"
+    },
+    {
+      "depth": 1,
+      "kind": "Mod",
+      "parent": "rich",
+      "path": "rich::types",
+      "visibility": "Public"
+    },
+    {
+      "depth": 2,
+      "kind": "Type",
+      "parent": "rich::types",
+      "path": "rich::types::Greet",
+      "visibility": "Public"
+    },
+    {
+      "depth": 2,
+      "kind": "Type",
+      "parent": "rich::types",
+      "path": "rich::types::Inner",
+      "visibility": "Public"
+    },
+    {
+      "depth": 2,
+      "kind": "Type",
+      "parent": "rich::types",
+      "path": "rich::types::Outer",
+      "visibility": "Public"
+    }
+  ]
+}

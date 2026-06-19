@@ -1,0 +1,15 @@
+[package]
+name = "modula-ir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Serializable intermediate representation (items, module tree, dependency edges) shared between modula-rs extraction and metrics layers."
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,0 +1,11 @@
+# Standalone (note the empty [workspace] table) so the parent workspace does not
+# adopt this fixture as a member.
+[workspace]
+
+[package]
+name = "spike"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"

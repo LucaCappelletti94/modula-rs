@@ -1,0 +1,8 @@
+# typos (spell-checker) configuration.
+
+[default.extend-words]
+# `ab` / `ba` are an intentional forward/reversed partition-pair naming
+# convention in the divergence property tests, not a typo for "by"/"be".
+ba = "ba"
+# Proper noun in a literature reference ("Universite d'Orleans").
+Universite = "Universite"

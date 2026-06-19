@@ -1,0 +1,28 @@
+[package]
+name = "modula-extract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "rust-analyzer based extraction of the modula-rs intermediate representation from a Rust crate or workspace."
+
+[dependencies]
+modula-ir.workspace = true
+anyhow.workspace = true
+
+# rust-analyzer as a library. These are the only heavy/unstable dependencies in
+# the project and are isolated to this crate. Pinned exact: the `ra_ap_*` API is
+# unstable and changes between snapshots.
+ra_ap_hir = "=0.0.336"
+ra_ap_ide = "=0.0.336"
+ra_ap_load-cargo = "=0.0.336"
+ra_ap_paths = "=0.0.336"
+ra_ap_project_model = "=0.0.336"
+ra_ap_syntax = "=0.0.336"
+ra_ap_vfs = "=0.0.336"
+
+[dev-dependencies]
+serde_json.workspace = true
+insta.workspace = true

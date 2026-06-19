@@ -1,0 +1,25 @@
+# cargo-deny configuration.
+#
+# Security advisories are scanned by `cargo audit` in CI; this file governs the
+# `licenses` and `bans` checks that `cargo deny check licenses bans` runs.
+
+[licenses]
+# Every dependency is permissively licensed. Multi-licensed crates (e.g.
+# "MIT OR Apache-2.0 OR LGPL-2.1-or-later") are satisfied by any allowed term,
+# so the weak-copyleft alternatives never need allowing.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+# The rust-analyzer (`ra_ap_*`) tree pulls in many duplicate transitive
+# versions; failing on that is noise rather than a supply-chain signal.
+multiple-versions = "allow"
+wildcards = "allow"

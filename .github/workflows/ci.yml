@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fast tier: the pure crates (no rust-analyzer). These build and test in seconds.
+  fast:
+    name: Fast (ir + metrics)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (ir + metrics)
+        run: cargo clippy -p modula-ir -p modula-metrics --all-targets -- -D warnings
+      - name: Test (ir + metrics)
+        run: cargo test -p modula-ir -p modula-metrics
+      - name: Docs (ir + metrics)
+        run: cargo doc -p modula-ir -p modula-metrics --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Slow tier: the rust-analyzer extractor and the CLI. Heavy build, and the
+  # integration tests need the sysroot std source (rust-src) for std-generic
+  # resolution and the proc-macro server (rust-analyzer component) for derive and
+  # other macro expansion. Those tests are #[ignore] and run explicitly.
+  slow:
+    name: Slow (extract + cli)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rust-src, rust-analyzer
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (extract + cli)
+        run: cargo clippy -p modula-extract -p cargo-modula --all-targets -- -D warnings
+      - name: Test (extract + cli, including ignored integration tests)
+        run: cargo test -p modula-extract -p cargo-modula -- --include-ignored
+      - name: Docs (extract + cli)
+        run: cargo doc -p modula-extract -p cargo-modula --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # The corpus tooling depends on the extractor (built above) plus diesel /
+      # plotters / a TLS stack. It is not shipped, so it is linted and unit-tested
+      # but excluded from the coverage gate (it is mostly I/O orchestration).
+      - name: Clippy (corpus tooling)
+        run: cargo clippy -p modula-corpus --all-targets -- -D warnings
+      - name: Test (corpus tooling)
+        run: cargo test -p modula-corpus
+
+  # Mutation testing of the lines changed in a pull request. Scoped by
+  # .cargo/mutants.toml to the pure crates and tested per-package, so it stays
+  # fast. Fails if newly added or changed logic is not covered by a test.
+  mutants:
+    name: Mutants (PR diff)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Diff against the base branch
+        run: git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+      - name: Mutation-test changed lines
+        run: cargo mutants --in-diff pr.diff -j 4
+
+  # Minimum supported Rust version. The workspace floor (1.95) is dictated by the
+  # ra_ap_* crates; this verifies the pure libraries still build on it (the
+  # extractor cannot build below it because ra_ap_* enforces 1.95 directly).
+  msrv:
+    name: MSRV (1.95)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Build pure crates on the MSRV toolchain
+        run: cargo check -p modula-ir -p modula-metrics --all-targets
+
+  # Source hygiene: unused dependencies (cargo machete) and typos. Neither builds
+  # the project, so this job is quick.
+  hygiene:
+    name: Hygiene (machete + typos)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete,typos
+      - name: Unused dependencies
+        run: cargo machete
+      - name: Typos
+        run: typos
+
+  # Workspace line coverage. Includes the ignored extraction tests, so it needs
+  # the same rust-src + rust-analyzer components as the slow tier plus llvm-tools.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools, rust-src, rust-analyzer
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      # `modula-corpus` is excluded: it is unshipped I/O orchestration tooling
+      # that cannot reach 90% line coverage (its pure logic is unit-tested in the
+      # slow job). Excluding it also keeps this job from building diesel/plotters.
+      - name: Coverage (fail under 90% lines)
+        run: cargo llvm-cov --workspace --exclude modula-corpus --fail-under-lines 90 -- --include-ignored
+
+  # Supply-chain checks: RUSTSEC advisories (cargo audit) and license/duplicate
+  # policy (cargo deny). Neither builds the project, so this job is quick.
+  security:
+    name: Security (audit + deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Audit (RUSTSEC advisories)
+        run: cargo audit
+      - name: Deny (licenses + bans)
+        run: cargo deny check licenses bans
