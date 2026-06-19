@@ -5,8 +5,8 @@ expression: to_human(&result)
 Modularity report for crate `k`
   8 items, 3 modules (2 in the dependency graph)
 
-Headline score: 0.758 / 1.000
-  cohesion       : 0.930
+Headline score: 0.723 / 1.000
+  cohesion       : 0.872
   acyclicity     : 1.000
   encapsulation  : 0.000
 

@@ -1,51 +1,52 @@
 //! Cohesion lift: a hub-tolerant measure of how well the declared module
 //! boundaries match the dependency graph.
 //!
-//! It compares the fraction of dependency weight that stays inside declared
-//! modules against the fraction a random partition with the same module sizes
-//! would retain by chance. The null expectation is analytic (no sampling), so
-//! the measure is deterministic and `O(V + E)`.
+//! Cohesion is scored per module and then combined, rather than as one global
+//! intra-fraction. For each module `m`, `observed` is the share of the edge
+//! weight leaving `m`'s items that stays inside `m`, and `expected` is the share
+//! that would stay inside if those items pointed at random targets,
+//! `(n_m - 1) / (N - 1)`. The per-module lift `(observed - expected) /
+//! (1 - expected)` is how much more `m` keeps to itself than chance. The crate
+//! score is the average of those lifts, weighted by `log(1 + activity)` and
+//! raised to a strictness exponent.
 //!
-//! This replaces the Newman-modularity efficiency and the AMI divergence. Those
-//! rest on a configuration-model null that treats a shared, widely-used module
-//! as "no community structure", which penalizes usage. Cohesion lift does not:
-//! a sink's edges are inter-module under every partition, so being depended upon
-//! is free, and only edges that genuinely cluster within a declared module count
-//! as signal.
+//! Only outgoing edges count, so being depended upon (high fan-in) is free,
+//! which is what makes the measure hub-tolerant and is why it replaces the
+//! Newman-modularity efficiency and AMI divergence, whose configuration-model
+//! null treated a shared, widely-used module as having no community structure.
+//! The `log` weight stops one enormous module (often generated) from dominating
+//! the verdict and squeezing out the others, and the exponent discounts modules
+//! that only barely beat chance so an arbitrary partition with marginal local
+//! cohesion does not read as well-modularized. The measure is analytic (no
+//! sampling), deterministic, and `O(V + E)`.
 
 use modula_ir::{CrateGraph, ItemKind};
 
 use crate::module_graph::ModuleAggregation;
 
-/// Cohesion lift in `[0, 1]`: `(declared - null) / (1 - null)`, where `declared`
-/// is the intra-module share of dependency weight and `null` is the share a
-/// size-preserving random partition would retain. `1` when every dependency
-/// stays within its module, `0` when the declared boundaries do no better than
-/// chance. `None` when there is no non-trivial partition (fewer than two
-/// modules), no dependency weight, or a single module holds essentially all
-/// items (no measurable structure).
+/// Strictness exponent applied to each per-module lift before averaging. `2`
+/// discounts marginal cohesion hard while preserving strong cohesion; raising it
+/// is stricter, lowering it toward `1` is more lenient.
+const STRICTNESS_EXPONENT: f64 = 2.0;
+
+/// Cohesion lift in `[0, 1]`: the `log`-activity-weighted, strictness-raised
+/// average of each module's lift over its size-based chance expectation. `1`
+/// when modules keep all their outgoing edges to themselves, `0` when the
+/// declared boundaries do no better than chance. `None` when there is no
+/// non-trivial partition (fewer than two modules), fewer than two real items, or
+/// no outgoing dependency weight to measure.
 #[must_use]
 pub fn cohesion_lift(ir: &CrateGraph, agg: &ModuleAggregation) -> Option<f64> {
-    if agg.len() < 2 {
+    let k = agg.len();
+    if k < 2 {
         return None;
     }
 
-    let intra: f64 = agg.intra.iter().sum();
-    let inter: f64 = agg.inter.values().sum();
-    let total = intra + inter;
-    if total <= 0.0 {
-        return None;
-    }
-    let declared = intra / total;
-
-    // Null expectation: for a uniform random assignment of items to the same
-    // module sizes, two distinct items share a module with probability
-    // `sum_m n_m (n_m - 1) / (N (N - 1))`, which is exactly the expected
-    // intra-fraction of every edge.
-    let mut sizes = vec![0usize; agg.len()];
+    // Real-item count per module node (module stubs are not graph nodes).
+    let mut sizes = vec![0usize; k];
     for item in &ir.items {
         if item.kind == ItemKind::Module {
-            continue; // real items only; module stubs are not graph nodes
+            continue;
         }
         if let Some(&node) = agg.index_of.get(&ir.real_module(item.owning_module)) {
             sizes[node] += 1;
@@ -55,16 +56,35 @@ pub fn cohesion_lift(ir: &CrateGraph, agg: &ModuleAggregation) -> Option<f64> {
     if n < 2 {
         return None;
     }
-    let same_pairs: f64 = sizes
-        .iter()
-        .map(|&s| (s * (s.saturating_sub(1))) as f64)
-        .sum();
-    let null = same_pairs / (n as f64 * (n - 1) as f64);
-    if null >= 1.0 - 1e-12 {
-        return None; // one module holds (almost) every item: no partition to score
+
+    // Efferent (outgoing cross-module) weight per module node.
+    let mut eff = vec![0.0f64; k];
+    for (&(src, _dst), &w) in &agg.inter {
+        eff[src] += w;
     }
 
-    Some(((declared - null) / (1.0 - null)).clamp(0.0, 1.0))
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for node in 0..k {
+        // Outgoing edge weight from this module: its internal edges plus the
+        // edges it sends to other modules. Incoming (afferent) weight is ignored
+        // so a depended-upon module is not penalized for its fan-in.
+        let activity = agg.intra[node] + eff[node];
+        if activity <= 0.0 {
+            continue; // a pure sink / edgeless module carries no cohesion signal
+        }
+        let observed = agg.intra[node] / activity;
+        let expected = (sizes[node] as f64 - 1.0) / (n as f64 - 1.0);
+        if expected >= 1.0 {
+            continue; // this module already holds every item: no partition to score
+        }
+        let lift = ((observed - expected) / (1.0 - expected)).clamp(0.0, 1.0);
+        let weight = (1.0 + activity).ln();
+        num += weight * lift.powf(STRICTNESS_EXPONENT);
+        den += weight;
+    }
+
+    (den > 0.0).then_some(num / den)
 }
 
 #[cfg(test)]
@@ -156,20 +176,24 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_sink_does_not_lower_cohesion() {
-        // Modules 1 and 2 each have an internal pair, and both also call into a
-        // shared item in module 3 (a sink). The within-module pairs still carry
-        // the signal; the sink edges are inter-module but expected to be so.
+    fn a_pure_sink_is_excluded_not_penalized() {
+        // Modules 1 and 2 each have an internal pair; both also depend on a
+        // shared item in module 3, which depends on nothing (a pure sink). The
+        // sink has no outgoing edges, so it is excluded from the average rather
+        // than scored as zero-cohesion: cohesion stays clearly positive, driven
+        // by modules 1 and 2. It is lower than the no-dependency case only
+        // because the consumers genuinely send some weight outward.
         let internal = build(4, &[(1, &[1]), (1, &[0]), (2, &[3]), (2, &[2])]);
         let with_sink = build(
             4,
             &[(1, &[1, 4]), (1, &[0]), (2, &[3, 4]), (2, &[2]), (3, &[])],
         );
-        // Adding the sink dependency keeps cohesion high (well above zero),
-        // because the declared partition still beats a random one by a lot.
         let s = lift(&with_sink).expect("structured");
-        assert!(s > 0.5, "shared sink must not collapse cohesion: {s}");
-        assert!(lift(&internal).expect("structured") >= s);
+        assert!(s > 0.25, "the sink must not collapse cohesion to ~0: {s}");
+        assert!(
+            lift(&internal).expect("structured") > s,
+            "depending outward on the sink lowers the consumers' cohesion"
+        );
     }
 
     #[test]
