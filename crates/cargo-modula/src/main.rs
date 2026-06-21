@@ -71,11 +71,14 @@ struct Args {
 fn main() -> ExitCode {
     let Cargo::Modula(args) = Cargo::parse();
     match run(&args) {
+        // Exit 0 when the gates pass, 1 when a gate fails, and 2 when the tool
+        // itself errors. The distinct error code lets callers (the CI action)
+        // tell a low score from a failure to analyze at all.
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) => {
             eprintln!("error: {error:#}");
-            ExitCode::FAILURE
+            ExitCode::from(2)
         }
     }
 }

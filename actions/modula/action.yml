@@ -1,0 +1,162 @@
+name: Modula
+description: Score how well a project's module tree matches its real dependency graph, across Rust and the SCIP languages.
+
+# Composite action. It downloads the prebuilt cargo-modula binary, scores the
+# project (auto-detecting the language and running the matching SCIP indexer when
+# the project is not Rust), writes the report to the job summary, gates the job on
+# score thresholds, and uploads the IR to the portal when MODULA_TOKEN is set.
+#
+# The project must already be buildable on the runner: cargo-modula runs the
+# language's own indexer, which rides that language's compiler. For the SCIP
+# languages add the usual runtime setup before this step (for example
+# actions/setup-node for TypeScript and Python, since their indexers run via npx,
+# actions/setup-go for Go, actions/setup-java plus coursier for the JVM, and the
+# .NET SDK with scip-dotnet for C#). C and C++ need scip-clang and a
+# compile_commands.json.
+
+inputs:
+  path:
+    description: Path to the project to score.
+    default: "."
+  version:
+    description: cargo-modula release to download (a tag like v0.1.0, or "latest").
+    default: latest
+  repository:
+    description: Repository that publishes the cargo-modula release archives.
+    default: LucaCappelletti94/modula-rs
+  min-headline:
+    description: Fail the job if the headline score is below this value (0 to 1). Empty disables the gate.
+    default: ""
+  require-acyclic:
+    description: Fail the job if the module dependency graph has any cycle.
+    default: "false"
+  max-overexposed:
+    description: Fail the job if the over-exposed item fraction exceeds this value (0 to 1). Empty disables the gate.
+    default: ""
+  upload:
+    description: Whether to upload the IR to the portal. "auto" uploads only when MODULA_TOKEN is set, "true" requires it, "false" never uploads.
+    default: auto
+  portal-url:
+    description: Portal endpoint that receives the IR upload. Provisional until the portal ships.
+    default: https://app.modula.rs/api/v1/ir
+
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-modula
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)   target=x86_64-unknown-linux-gnu ;;
+          Linux/ARM64) target=aarch64-unknown-linux-gnu ;;
+          macOS/X64)   target=x86_64-apple-darwin ;;
+          macOS/ARM64) target=aarch64-apple-darwin ;;
+          *)
+            echo "::error::the modula action supports Linux and macOS runners, not ${RUNNER_OS}/${RUNNER_ARCH}. Windows binaries are published on the release for manual use."
+            exit 1
+            ;;
+        esac
+        asset="cargo-modula-${target}.tar.gz"
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          url="https://github.com/${{ inputs.repository }}/releases/latest/download/${asset}"
+        else
+          url="https://github.com/${{ inputs.repository }}/releases/download/${{ inputs.version }}/${asset}"
+        fi
+        dir="${RUNNER_TEMP}/modula-bin"
+        mkdir -p "$dir"
+        echo "Downloading ${url}"
+        curl -fsSL "$url" -o "${dir}/${asset}"
+        tar -xzf "${dir}/${asset}" -C "$dir"
+        chmod +x "${dir}/cargo-modula"
+        echo "$dir" >> "$GITHUB_PATH"
+
+    - name: Score
+      id: score
+      shell: bash
+      run: |
+        set -uo pipefail
+        args=(modula "${{ inputs.path }}")
+        if [ -n "${{ inputs.min-headline }}" ]; then
+          args+=(--min-headline "${{ inputs.min-headline }}")
+        fi
+        if [ "${{ inputs.require-acyclic }}" = "true" ]; then
+          args+=(--require-acyclic)
+        fi
+        if [ -n "${{ inputs.max-overexposed }}" ]; then
+          args+=(--max-overexposed "${{ inputs.max-overexposed }}")
+        fi
+        report="${RUNNER_TEMP}/modula-report.txt"
+        set +e
+        cargo-modula "${args[@]}" 2>&1 | tee "$report"
+        code=${PIPESTATUS[0]}
+        set -e
+        {
+          echo "## Modula modularity report"
+          echo ""
+          echo '```'
+          cat "$report"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload IR to the portal
+      shell: bash
+      run: |
+        set -uo pipefail
+        upload="${{ inputs.upload }}"
+        if [ "$upload" = "false" ]; then
+          echo "Upload disabled."
+          exit 0
+        fi
+        if [ -z "${MODULA_TOKEN:-}" ]; then
+          if [ "$upload" = "true" ]; then
+            echo "::error::upload is set to true but MODULA_TOKEN is not set."
+            exit 1
+          fi
+          echo "MODULA_TOKEN is not set, skipping upload."
+          exit 0
+        fi
+        # This re-runs extraction (the Score step already ran it once). It is a
+        # separate cargo-modula invocation because the CLI either scores or emits
+        # the IR, not both. If extraction fails here, skip the upload rather than
+        # POST a truncated payload.
+        ir="${RUNNER_TEMP}/modula-ir.bin"
+        if ! cargo-modula modula "${{ inputs.path }}" --emit-ir > "$ir"; then
+          echo "::warning::skipping upload, --emit-ir failed."
+          exit 0
+        fi
+        url="${{ inputs.portal-url }}"
+        echo "Uploading IR ($(wc -c < "$ir") bytes) to ${url}"
+        http=$(curl -sS -o /dev/null -w '%{http_code}' \
+          -X POST "$url" \
+          -H "Authorization: Bearer ${MODULA_TOKEN}" \
+          -H "Content-Type: application/octet-stream" \
+          -H "X-Modula-Repository: ${GITHUB_REPOSITORY}" \
+          -H "X-Modula-Sha: ${GITHUB_SHA}" \
+          -H "X-Modula-Ref: ${GITHUB_REF}" \
+          --data-binary @"$ir" || echo "000")
+        if [ "$http" -ge 200 ] && [ "$http" -lt 300 ]; then
+          echo "Upload succeeded (HTTP ${http})."
+        else
+          echo "::warning::IR upload failed (HTTP ${http}). The portal may not be available yet."
+        fi
+
+    - name: Enforce gates
+      shell: bash
+      run: |
+        set -euo pipefail
+        code="${{ steps.score.outputs.exit-code }}"
+        case "$code" in
+          0)
+            echo "modula gates passed."
+            ;;
+          1)
+            echo "::error::modula gate failed: the score is below a configured threshold. See the report above."
+            exit 1
+            ;;
+          *)
+            echo "::error::cargo-modula failed to analyze the project (exit ${code}). See the report above, this is not a score threshold failure."
+            exit "$code"
+            ;;
+        esac
