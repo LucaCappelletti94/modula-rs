@@ -414,11 +414,62 @@ impl ScipIndexer for PythonIndexer {
     }
 }
 
+/// The pinned `scip-go` version fetched via `go run` when it is not on `PATH`.
+const SCIP_GO_VERSION: &str = "v0.2.7";
+
+/// The Go indexer, `scip-go`. Distributed as a Go program (not npm), so the
+/// fetch-and-run form uses `go run <package>@version`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GoIndexer;
+
+impl ScipIndexer for GoIndexer {
+    fn detect(&self, root: &Path) -> bool {
+        root.join("go.mod").is_file()
+    }
+
+    fn command(&self, root: &Path, output: &Path) -> Option<Command> {
+        fn index_args(command: &mut Command, root: &Path, output: &Path) {
+            command
+                .arg("index")
+                .arg("--module-root")
+                .arg(root)
+                .arg("--output")
+                .arg(output)
+                .arg("--quiet");
+        }
+        if on_path("scip-go") {
+            let mut command = Command::new("scip-go");
+            index_args(&mut command, root, output);
+            Some(command)
+        } else if on_path("go") {
+            let mut command = Command::new("go");
+            command
+                .arg("run")
+                .arg(format!(
+                    "github.com/scip-code/scip-go/cmd/scip-go@{SCIP_GO_VERSION}"
+                ))
+                // scip-go needs a recent Go; let the toolchain upgrade itself.
+                .env("GOTOOLCHAIN", "auto");
+            index_args(&mut command, root, output);
+            Some(command)
+        } else {
+            None
+        }
+    }
+
+    fn install_hint(&self) -> &'static str {
+        "install Go (for `go run`), or scip-go from github.com/scip-code/scip-go"
+    }
+}
+
 /// The indexer that recognizes the project at `root`, if any.
 #[must_use]
 pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
-    let indexers: Vec<Box<dyn ScipIndexer>> =
-        vec![Box::new(TypeScriptIndexer), Box::new(PythonIndexer)];
+    let indexers: Vec<Box<dyn ScipIndexer>> = vec![
+        Box::new(TypeScriptIndexer),
+        Box::new(PythonIndexer),
+        Box::new(GoIndexer),
+    ];
     indexers.into_iter().find(|indexer| indexer.detect(root))
 }
 
@@ -529,6 +580,46 @@ mod tests {
             assert!(
                 pkg_at < index_at,
                 "npx package spec must precede the index subcommand: {args:?}"
+            );
+        }
+    }
+
+    fn go_fixture() -> std::path::PathBuf {
+        [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", "sample-go"]
+            .iter()
+            .collect()
+    }
+
+    #[test]
+    fn go_indexer_detects_a_project() {
+        assert!(GoIndexer.detect(&go_fixture()));
+        assert!(indexer_for(&go_fixture()).is_some());
+        assert!(!GoIndexer.detect(Path::new("/nonexistent/place")));
+    }
+
+    #[test]
+    fn go_command_targets_the_output() {
+        let output = Path::new("/tmp/out.scip");
+        let Some(command) = GoIndexer.command(&go_fixture(), output) else {
+            return; // Neither scip-go nor go on PATH in this environment.
+        };
+        let program = command.get_program().to_string_lossy().into_owned();
+        assert!(
+            program == "go" || program == "scip-go",
+            "unexpected program {program}"
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let index_at = args.iter().position(|a| a == "index");
+        assert!(index_at.is_some(), "{args:?}");
+        assert!(args.iter().any(|a| a == "/tmp/out.scip"), "{args:?}");
+        if program == "go" {
+            let pkg_at = args.iter().position(|a| a.contains("scip-go"));
+            assert!(
+                pkg_at < index_at,
+                "go run package spec must precede the index subcommand: {args:?}"
             );
         }
     }
