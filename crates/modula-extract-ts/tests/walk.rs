@@ -80,6 +80,25 @@ fn records_import_edges_between_modules() {
 }
 
 #[test]
+fn records_within_file_reference_edges() {
+    use modula_ir::{ItemId, RefKind};
+
+    let graph = TsExtractor
+        .extract(&ExtractRequest::new(fixture()))
+        .expect("extract");
+    let path = |item: ItemId| graph.item(item).canonical_path.clone();
+    let has_edge = graph.edges.iter().any(|e| {
+        e.kind == RefKind::Body
+            && path(e.from).ends_with("::add")
+            && path(e.to).ends_with("::double")
+    });
+    assert!(
+        has_edge,
+        "expected a body edge add -> double within util/math"
+    );
+}
+
+#[test]
 fn analyzes_without_panicking() {
     use modula_metrics::analysis::{AnalysisConfig, analyze};
 

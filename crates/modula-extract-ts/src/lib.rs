@@ -1,10 +1,13 @@
 //! TypeScript and JavaScript extraction of the modula-rs IR, built on `oxc`.
 //!
-//! Walking skeleton: discover the source files under a project, build the
-//! directory and file module tree, and record each file's top-level named
-//! declarations as items (exported ones public, the rest module-local). No
-//! dependency edges yet. Those arrive in later steps, imports via `oxc_resolver`
-//! and within-file references via `oxc_semantic`.
+//! It discovers the source files under a project, builds the directory and file
+//! module tree, and records each file's top-level named declarations as items
+//! (exported ones public, the rest module-local). Module-level import edges come
+//! from `oxc_resolver` (a relative import becomes an edge between the two file
+//! modules), and within-file reference edges come from `oxc_semantic` (an
+//! identifier resolving to another top-level item in the same file). Still to
+//! come: a type-container level for classes and interfaces, finer visibility,
+//! and cross-file symbol-level edges.
 
 #![forbid(unsafe_code)]
 
@@ -15,9 +18,11 @@ use anyhow::{Context as _, Result};
 use modula_extract_api::{CrateGraphBuilder, ExtractRequest, Frontend, TypeScript};
 use modula_ir::{ItemKind, ModuleId, RefKind, Visibility};
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{Declaration, Statement};
+use oxc_ast::ast::{BindingIdentifier, Declaration, IdentifierReference, Statement};
+use oxc_ast_visit::Visit;
 use oxc_parser::Parser;
 use oxc_resolver::{ResolveOptions, Resolver};
+use oxc_semantic::{Scoping, SemanticBuilder, SymbolId};
 use oxc_span::SourceType;
 use walkdir::WalkDir;
 
@@ -157,8 +162,9 @@ fn ensure_dir_modules(
     id
 }
 
-/// Parses one file, records its top-level named declarations as items, and
-/// returns the relative import specifiers it found, for later edge resolution.
+/// Parses one file, records its top-level named declarations as items with the
+/// within-file reference edges between them, and returns the relative import
+/// specifiers it found (for later cross-file edge resolution).
 fn collect_file(
     builder: &mut CrateGraphBuilder,
     file_mod: ModuleId,
@@ -170,8 +176,15 @@ fn collect_file(
     let source_type = SourceType::from_path(path).unwrap_or_default();
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &source, source_type).parse();
+    // Resolves identifier references to their symbols within the file, setting
+    // the reference ids on the AST nodes in place via interior mutability.
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let scoping = semantic.scoping();
 
+    // First pass: an item per top-level named declaration, the import
+    // specifiers, and a map from each item's symbol to its key.
     let mut specifiers = Vec::new();
+    let mut targets: HashMap<SymbolId, String> = HashMap::new();
     for statement in &parsed.program.body {
         match statement {
             Statement::ImportDeclaration(import) => {
@@ -182,15 +195,23 @@ fn collect_file(
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(declaration) = &export.declaration {
-                    add_declaration(builder, file_mod, file_key, declaration, Visibility::Public);
+                    add_item_decl(
+                        builder,
+                        &mut targets,
+                        file_mod,
+                        file_key,
+                        declaration,
+                        Visibility::Public,
+                    );
                 } else if let Some(source) = &export.source {
                     push_relative(&mut specifiers, source.value.as_str());
                 }
             }
             other => {
                 if let Some(declaration) = other.as_declaration() {
-                    add_declaration(
+                    add_item_decl(
                         builder,
+                        &mut targets,
                         file_mod,
                         file_key,
                         declaration,
@@ -200,7 +221,38 @@ fn collect_file(
             }
         }
     }
+
+    // Second pass: within-file reference edges. Walk each item's subtree and
+    // emit an edge to every other top-level item its references resolve to.
+    for statement in &parsed.program.body {
+        let Some(declaration) = statement_declaration(statement) else {
+            continue;
+        };
+        let Some(binding) = declaration_binding(declaration) else {
+            continue;
+        };
+        let from_key = format!("{file_key}::{}", binding.name.as_str());
+        let mut collector = RefCollector {
+            scoping,
+            targets: &targets,
+            out: Vec::new(),
+        };
+        collector.visit_declaration(declaration);
+        for to_key in collector.out {
+            if to_key != from_key {
+                builder.add_edge(&from_key, &to_key, RefKind::Body);
+            }
+        }
+    }
     Ok(specifiers)
+}
+
+/// The declaration a statement introduces, whether bare or `export`ed.
+fn statement_declaration<'b, 'a>(statement: &'b Statement<'a>) -> Option<&'b Declaration<'a>> {
+    match statement {
+        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+        other => other.as_declaration(),
+    }
 }
 
 /// Records a relative module specifier (a within-project import). Bare package
@@ -211,9 +263,10 @@ fn push_relative(specifiers: &mut Vec<String>, specifier: &str) {
     }
 }
 
-/// Records a single named declaration as an item.
-fn add_declaration(
+/// Adds an item for a named declaration and maps its symbol to the item key.
+fn add_item_decl(
     builder: &mut CrateGraphBuilder,
+    targets: &mut HashMap<SymbolId, String>,
     file_mod: ModuleId,
     file_key: &str,
     declaration: &Declaration,
@@ -222,11 +275,48 @@ fn add_declaration(
     let Some(kind) = declaration_kind(declaration) else {
         return;
     };
-    let Some(name) = declaration.id().map(|ident| ident.name.as_str().to_owned()) else {
+    let Some(binding) = declaration_binding(declaration) else {
         return;
     };
+    let name = binding.name.as_str();
     let key = format!("{file_key}::{name}");
-    builder.add_item(file_mod, &key, &name, kind, visibility);
+    builder.add_item(file_mod, &key, name, kind, visibility);
+    if let Some(symbol_id) = binding.symbol_id.get() {
+        targets.insert(symbol_id, key);
+    }
+}
+
+/// The binding identifier a named declaration introduces, if any.
+fn declaration_binding<'b, 'a>(
+    declaration: &'b Declaration<'a>,
+) -> Option<&'b BindingIdentifier<'a>> {
+    match declaration {
+        Declaration::FunctionDeclaration(function) => function.id.as_ref(),
+        Declaration::ClassDeclaration(class) => class.id.as_ref(),
+        Declaration::TSInterfaceDeclaration(interface) => Some(&interface.id),
+        Declaration::TSTypeAliasDeclaration(alias) => Some(&alias.id),
+        Declaration::TSEnumDeclaration(enumeration) => Some(&enumeration.id),
+        _ => None,
+    }
+}
+
+/// Visitor that records, for one declaration's subtree, the keys of the
+/// top-level items its identifier references resolve to.
+struct RefCollector<'s> {
+    scoping: &'s Scoping,
+    targets: &'s HashMap<SymbolId, String>,
+    out: Vec<String>,
+}
+
+impl<'a> Visit<'a> for RefCollector<'_> {
+    fn visit_identifier_reference(&mut self, reference: &IdentifierReference<'a>) {
+        if let Some(reference_id) = reference.reference_id.get()
+            && let Some(symbol_id) = self.scoping.get_reference(reference_id).symbol_id()
+            && let Some(key) = self.targets.get(&symbol_id)
+        {
+            self.out.push(key.clone());
+        }
+    }
 }
 
 /// Maps a TypeScript or JavaScript declaration to an IR item kind. Returns
