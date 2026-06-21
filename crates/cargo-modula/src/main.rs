@@ -4,12 +4,13 @@
 //! Invoked as a cargo subcommand (`cargo modula [PATH]`) or directly
 //! (`cargo-modula modula [PATH]`).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context as _;
 use clap::Parser;
-use modula_extract::{ExtractOptions, Extractor, RaExtractor};
+use modula_extract::RaExtractor;
+use modula_extract_api::{ExtractOptions, ExtractRequest, Registry};
 use modula_metrics::analysis::{AnalysisConfig, analyze};
 use modula_metrics::report::{Gates, evaluate_gates, to_human, to_json};
 
@@ -41,6 +42,12 @@ struct Args {
     #[arg(long)]
     json: bool,
 
+    /// Emit the extracted IR (the `CrateGraph`) as a compact binary container and
+    /// exit, without scoring. This is the input the `modula-web` report viewer
+    /// consumes. The bytes go to stdout, so redirect them to a file.
+    #[arg(long)]
+    emit_ir: bool,
+
     /// Fail (non-zero exit) if the headline score is below this threshold.
     #[arg(long, value_name = "SCORE")]
     min_headline: Option<f64>,
@@ -68,15 +75,39 @@ fn main() -> ExitCode {
 
 /// Runs the analysis and prints the report. Returns whether the gates passed.
 fn run(args: &Args) -> anyhow::Result<bool> {
-    let manifest_path = resolve_manifest(&args.path)?;
+    anyhow::ensure!(
+        args.path.exists(),
+        "path does not exist: {}",
+        args.path.display()
+    );
+    let request = ExtractRequest {
+        root: args.path.clone(),
+        language: None,
+        options: ExtractOptions {
+            include_dependencies: false,
+            member: args.package.clone(),
+            all_members: args.workspace,
+        },
+    };
+    let mut registry = Registry::new();
+    registry.register(Box::new(RaExtractor));
+    let graph = registry.extract(&request).context("extraction failed")?;
 
-    let graph = RaExtractor
-        .extract(&ExtractOptions {
-            manifest_path,
-            package: args.package.clone(),
-            workspace: args.workspace,
-        })
-        .context("extraction failed")?;
+    if args.emit_ir {
+        use std::io::Write as _;
+        let payload = modula_ir::encode_compact(&graph).context("encoding IR")?;
+        let compressed = zstd::encode_all(payload.as_slice(), 19).context("compressing IR")?;
+        let bytes = modula_ir::wrap_container(
+            &compressed,
+            modula_ir::Codec::PostcardCompact,
+            modula_ir::Compression::Zstd,
+        );
+        std::io::stdout()
+            .write_all(&bytes)
+            .context("writing IR container")?;
+        return Ok(true);
+    }
+
     let result = analyze(&graph, &AnalysisConfig::default()).context("analysis failed")?;
 
     if args.json {
@@ -104,21 +135,4 @@ fn run(args: &Args) -> anyhow::Result<bool> {
         }
     }
     Ok(outcome.passed)
-}
-
-/// Resolves a user-supplied path to a `Cargo.toml`.
-fn resolve_manifest(path: &Path) -> anyhow::Result<PathBuf> {
-    if path.is_dir() {
-        let manifest = path.join("Cargo.toml");
-        anyhow::ensure!(
-            manifest.is_file(),
-            "no Cargo.toml found in {}",
-            path.display()
-        );
-        Ok(manifest)
-    } else if path.is_file() {
-        Ok(path.to_path_buf())
-    } else {
-        anyhow::bail!("path does not exist: {}", path.display())
-    }
 }

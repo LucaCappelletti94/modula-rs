@@ -1,12 +1,19 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# `modula-web` is a Dioxus wasm app with a large browser-side dependency tree
+# that the shipped crates do not use. It is its own workspace (built with `dx`,
+# not `cargo`), so the native build and the clippy / audit / deny gates here stay
+# focused on the scoring crates. It depends on `modula-ir` / `modula-metrics` by
+# path (both compile to `wasm32-unknown-unknown`).
+exclude = ["crates/modula-web"]
 # `modula-corpus` is heavy internal tooling (diesel, plotters, an HTTP/TLS stack)
 # that the shipped crates do not depend on. Keep it out of the default build so
 # routine `cargo build`/`cargo test` stay fast; `--workspace` (and the cargo
 # deny / audit gates) still cover it.
 default-members = [
     "crates/modula-ir",
+    "crates/modula-extract-api",
     "crates/modula-extract",
     "crates/modula-metrics",
     "crates/cargo-modula",
@@ -24,6 +31,7 @@ authors = ["Luca Cappelletti <cappelletti.luca94@gmail.com>"]
 [workspace.dependencies]
 # Internal crates
 modula-ir = { path = "crates/modula-ir" }
+modula-extract-api = { path = "crates/modula-extract-api" }
 modula-extract = { path = "crates/modula-extract" }
 modula-metrics = { path = "crates/modula-metrics" }
 
@@ -33,6 +41,12 @@ geometric-traits = { git = "https://github.com/earth-metabolome-initiative/geome
 # Shared third-party
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+postcard = { version = "1", features = ["alloc"] }
+# Pure-Rust, decode-only zstd. Builds for `wasm32-unknown-unknown`, unlike the
+# C-backed `zstd` crate, so the IR container can be read in the web app.
+ruzstd = "0.8"
+# C-backed zstd, native only (compression). Lives in the heavy/native crates.
+zstd = "0.13"
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

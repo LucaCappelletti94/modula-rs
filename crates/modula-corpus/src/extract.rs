@@ -4,8 +4,9 @@
 //! Extraction is the expensive, rust-analyzer-bound step, and it can panic, hang
 //! or leak on pathological crates, so each crate runs in a `extract-one`
 //! subprocess (this same binary re-invoked) under a hard wall-clock timeout that
-//! kills the whole process group. The serialized `CrateGraph` is written to
-//! `ir/<name>-<version>.ir.json` for the metrics-only `sweep` phase to reuse.
+//! kills the whole process group. The serialized `CrateGraph` is written as a
+//! compact binary container to `ir/<name>-<version>.bin.zst` for the
+//! metrics-only `sweep` phase to reuse.
 
 use std::fs;
 use std::io::Write as _;
@@ -19,7 +20,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result};
 use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
-use modula_extract::{ExtractOptions, Extractor, RaExtractor};
+use modula_extract::RaExtractor;
+use modula_extract_api::{ExtractRequest, Extractor};
+use modula_ir::CrateGraph;
 use tar::Archive;
 
 use crate::db;
@@ -71,21 +74,27 @@ impl Dirs {
 }
 
 /// The `extract-one` worker: extract IR for the crate at `crate_dir`, print the
-/// serialized `CrateGraph` to stdout. Run as a subprocess, one crate per call.
+/// serialized `CrateGraph` as a compact binary container to stdout. Run as a
+/// subprocess, one crate per call.
 pub fn extract_one(crate_dir: &Path) -> Result<()> {
-    let manifest = crate_dir.join("Cargo.toml");
     let graph = RaExtractor
-        .extract(&ExtractOptions {
-            manifest_path: manifest,
-            package: None,
-            workspace: false,
-        })
+        .extract(&ExtractRequest::new(crate_dir))
         .context("extraction failed")?;
-    let json = serde_json::to_string(&graph).context("serializing IR")?;
+    let bytes = encode_ir_container(&graph)?;
     let mut out = std::io::stdout().lock();
-    out.write_all(json.as_bytes())
-        .context("writing IR to stdout")?;
+    out.write_all(&bytes).context("writing IR to stdout")?;
     Ok(())
+}
+
+/// Encodes a graph as the compact, zstd-compressed binary IR container.
+pub(crate) fn encode_ir_container(graph: &CrateGraph) -> Result<Vec<u8>> {
+    let payload = modula_ir::encode_compact(graph).context("encoding IR")?;
+    let compressed = zstd::encode_all(payload.as_slice(), 19).context("compressing IR")?;
+    Ok(modula_ir::wrap_container(
+        &compressed,
+        modula_ir::Codec::PostcardCompact,
+        modula_ir::Compression::Zstd,
+    ))
 }
 
 /// Runs the full `extract` phase.
@@ -276,12 +285,13 @@ fn process(
             row.status = "extract_fail".to_owned();
             row.error = Some(msg);
         }
-        WorkerOutcome::Ok(ir_json) => match ir_summary(&ir_json) {
-            Some(summary) => {
+        WorkerOutcome::Ok(ir_bytes) => match modula_ir::read_container(&ir_bytes) {
+            Ok(graph) => {
+                let summary = ir_summary(&graph);
                 let ir_path = dirs
                     .ir
-                    .join(format!("{}-{}.ir.json", item.name, item.version));
-                if let Err(e) = fs::write(&ir_path, &ir_json) {
+                    .join(format!("{}-{}.bin.zst", item.name, item.version));
+                if let Err(e) = fs::write(&ir_path, &ir_bytes) {
                     row.status = "extract_fail".to_owned();
                     row.error = Some(format!("writing IR: {e}"));
                 } else {
@@ -305,9 +315,9 @@ fn process(
                     row.n_pub_api_items = Some(summary.n_pub_api_items);
                 }
             }
-            None => {
+            Err(e) => {
                 row.status = "parse_fail".to_owned();
-                row.error = Some("IR JSON missing expected arrays".to_owned());
+                row.error = Some(format!("decoding IR: {e}"));
             }
         },
     }
@@ -468,56 +478,31 @@ struct IrSummary {
     n_pub_api_items: i32,
 }
 
-fn ir_summary(ir_json: &[u8]) -> Option<IrSummary> {
-    let v: serde_json::Value = serde_json::from_slice(ir_json).ok()?;
-    let items = v.get("items")?.as_array()?;
-    let edges = v.get("edges")?.as_array()?;
-    let modules = v.get("modules")?.as_array()?;
+fn ir_summary(graph: &CrateGraph) -> IrSummary {
+    use modula_ir::{ItemKind, RefKind};
 
-    // Tally edge kinds and item kinds by their serde tag.
-    let tag = |val: &serde_json::Value| val.get("kind").and_then(|x| x.as_str()).map(str::to_owned);
-    let edge_kind = |k: &str| {
-        edges
-            .iter()
-            .filter(|e| tag(e).as_deref() == Some(k))
-            .count() as i32
-    };
-    let item_kind = |k: &str| {
-        items
-            .iter()
-            .filter(|i| tag(i).as_deref() == Some(k))
-            .count() as i32
-    };
-    let n_pub_api_items = items
-        .iter()
-        .filter(|i| i.get("reachable_pub_api").and_then(|x| x.as_bool()) == Some(true))
-        .count() as i32;
+    let edge_kind = |k: RefKind| graph.edges.iter().filter(|e| e.kind == k).count() as i32;
+    let item_kind = |k: ItemKind| graph.items.iter().filter(|i| i.kind == k).count() as i32;
+    let n_pub_api_items = graph.items.iter().filter(|i| i.reachable_pub_api).count() as i32;
 
-    Some(IrSummary {
-        n_items: items.len() as i32,
-        n_modules: modules.len() as i32,
-        n_edges: edges.len() as i32,
-        ra_version: v
-            .get("ra_version")
-            .and_then(|x| x.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned),
-        schema_version: v
-            .get("schema_version")
-            .and_then(|x| x.as_i64())
-            .map(|x| x as i32),
-        n_import_edges: edge_kind("Import"),
-        n_signature_edges: edge_kind("Signature"),
-        n_trait_bound_edges: edge_kind("TraitBound"),
-        n_impl_edges: edge_kind("Impl"),
-        n_body_edges: edge_kind("Body"),
-        n_structs: item_kind("Struct"),
-        n_enums: item_kind("Enum"),
-        n_traits: item_kind("Trait"),
-        n_type_aliases: item_kind("TypeAlias"),
-        n_functions: item_kind("Function"),
+    IrSummary {
+        n_items: graph.items.len() as i32,
+        n_modules: graph.modules.len() as i32,
+        n_edges: graph.edges.len() as i32,
+        ra_version: Some(graph.ra_version.clone()).filter(|s| !s.is_empty()),
+        schema_version: Some(graph.schema_version as i32),
+        n_import_edges: edge_kind(RefKind::Import),
+        n_signature_edges: edge_kind(RefKind::Signature),
+        n_trait_bound_edges: edge_kind(RefKind::TraitBound),
+        n_impl_edges: edge_kind(RefKind::Impl),
+        n_body_edges: edge_kind(RefKind::Body),
+        n_structs: item_kind(ItemKind::Struct),
+        n_enums: item_kind(ItemKind::Enum),
+        n_traits: item_kind(ItemKind::Trait),
+        n_type_aliases: item_kind(ItemKind::TypeAlias),
+        n_functions: item_kind(ItemKind::Function),
         n_pub_api_items,
-    })
+    }
 }
 
 /// Downloads the db-dump if it is not already present.
@@ -570,12 +555,71 @@ fn non_empty(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::ir_summary;
+    use modula_ir::{
+        Crate, CrateGraph, CrateId, Edge, Item, ItemId, ItemKind, Module, ModuleId, ModuleKind,
+        RefKind, Visibility,
+    };
+
+    fn item(id: u32, kind: ItemKind, pub_api: bool) -> Item {
+        Item {
+            id: ItemId(id),
+            canonical_path: format!("k::i{id}"),
+            kind,
+            visibility: Visibility::Public,
+            owning_module: ModuleId(0),
+            crate_id: CrateId(0),
+            has_canonical_path: true,
+            reachable_pub_api: pub_api,
+        }
+    }
+
+    fn edge(kind: RefKind) -> Edge {
+        Edge {
+            from: ItemId(0),
+            to: ItemId(0),
+            kind,
+            weight: 1,
+        }
+    }
+
+    fn graph(items: Vec<Item>, edges: Vec<Edge>, ra: &str) -> CrateGraph {
+        CrateGraph {
+            schema_version: 2,
+            ra_version: ra.to_owned(),
+            root_crate: CrateId(0),
+            crates: vec![Crate {
+                id: CrateId(0),
+                name: "k".to_owned(),
+                is_local: true,
+                root_module: ModuleId(0),
+            }],
+            modules: vec![Module {
+                id: ModuleId(0),
+                crate_id: CrateId(0),
+                parent: None,
+                name: String::new(),
+                canonical_path: "k".to_owned(),
+                depth: 0,
+                visibility: Visibility::Public,
+                kind: ModuleKind::Mod,
+            }],
+            items,
+            edges,
+        }
+    }
 
     #[test]
     fn ir_summary_reads_counts_and_provenance() {
-        let json = br#"{"items":[1,2,3],"modules":[1],"edges":[],
-            "ra_version":"0.0.336","schema_version":2,"extra":9}"#;
-        let s = ir_summary(json).expect("valid IR");
+        let g = graph(
+            vec![
+                item(0, ItemKind::Struct, true),
+                item(1, ItemKind::Function, false),
+                item(2, ItemKind::Trait, true),
+            ],
+            Vec::new(),
+            "0.0.336",
+        );
+        let s = ir_summary(&g);
         assert_eq!((s.n_items, s.n_modules, s.n_edges), (3, 1, 0));
         assert_eq!(s.ra_version.as_deref(), Some("0.0.336"));
         assert_eq!(s.schema_version, Some(2));
@@ -583,16 +627,23 @@ mod tests {
 
     #[test]
     fn ir_summary_tallies_edge_and_item_composition() {
-        let json = br#"{
-            "items":[{"kind":"Struct","reachable_pub_api":true},
-                     {"kind":"Trait","reachable_pub_api":false},
-                     {"kind":"Function","reachable_pub_api":true},
-                     {"kind":"TypeAlias","reachable_pub_api":false}],
-            "modules":[{}],
-            "edges":[{"kind":"Body"},{"kind":"Body"},{"kind":"Signature"},
-                     {"kind":"Impl"},{"kind":"Import"}]
-        }"#;
-        let s = ir_summary(json).expect("valid IR");
+        let g = graph(
+            vec![
+                item(0, ItemKind::Struct, true),
+                item(1, ItemKind::Trait, false),
+                item(2, ItemKind::Function, true),
+                item(3, ItemKind::TypeAlias, false),
+            ],
+            vec![
+                edge(RefKind::Body),
+                edge(RefKind::Body),
+                edge(RefKind::Signature),
+                edge(RefKind::Impl),
+                edge(RefKind::Import),
+            ],
+            "",
+        );
+        let s = ir_summary(&g);
         assert_eq!(
             (
                 s.n_structs,
@@ -617,19 +668,10 @@ mod tests {
     }
 
     #[test]
-    fn ir_summary_tolerates_missing_provenance() {
-        let s = ir_summary(br#"{"items":[],"modules":[],"edges":[],"ra_version":""}"#)
-            .expect("valid IR");
-        assert_eq!((s.n_items, s.n_modules, s.n_edges), (0, 0, 0));
+    fn ir_summary_normalizes_empty_provenance() {
+        let s = ir_summary(&graph(Vec::new(), Vec::new(), ""));
+        assert_eq!((s.n_items, s.n_modules, s.n_edges), (0, 1, 0));
         assert_eq!(s.ra_version, None); // empty string normalized to None
-        assert_eq!(s.schema_version, None);
-    }
-
-    #[test]
-    fn ir_summary_rejects_malformed_or_incomplete_ir() {
-        assert!(ir_summary(b"{}").is_none());
-        assert!(ir_summary(b"not json").is_none());
-        // Missing the `edges` array.
-        assert!(ir_summary(br#"{"items":[],"modules":[]}"#).is_none());
+        assert_eq!(s.schema_version, Some(2));
     }
 }

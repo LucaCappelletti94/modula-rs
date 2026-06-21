@@ -99,7 +99,7 @@ fn nonexistent_path_errors() {
 
 #[test]
 fn directory_without_manifest_errors() {
-    // A real directory that has no Cargo.toml.
+    // A real directory that is not a project of any supported language.
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("no_manifest_here");
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let _ = std::fs::remove_file(dir.join("Cargo.toml"));
@@ -110,7 +110,10 @@ fn directory_without_manifest_errors() {
         .expect("run cargo-modula");
     assert!(!output.status.success(), "expected failure exit");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no Cargo.toml"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("could not detect a supported language"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]

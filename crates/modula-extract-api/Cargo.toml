@@ -1,0 +1,16 @@
+[package]
+name = "modula-extract-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Language-neutral extraction seam for modula-rs: a CrateGraph builder, a per-language Frontend trait, and an Extractor registry that produce the shared IR."
+
+[dependencies]
+modula-ir.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+modula-metrics.workspace = true

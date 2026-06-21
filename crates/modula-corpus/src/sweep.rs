@@ -9,7 +9,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use indicatif::ParallelProgressIterator as _;
-use modula_ir::CrateGraph;
 use modula_metrics::analysis::{AnalysisConfig, AnalysisResult, analyze};
 use rayon::prelude::*;
 
@@ -76,7 +75,7 @@ fn analyze_one(e: &Extraction) -> Analysis {
     let started = Instant::now();
     let result = std::fs::read(path)
         .with_context(|| format!("reading {path}"))
-        .and_then(|bytes| serde_json::from_slice::<CrateGraph>(&bytes).context("deserializing IR"))
+        .and_then(|bytes| modula_ir::read_container(&bytes).context("deserializing IR"))
         .and_then(|ir| analyze(&ir, &AnalysisConfig::default()).context("analyze"));
     row.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
 

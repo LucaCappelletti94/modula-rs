@@ -10,6 +10,10 @@ description = "Serializable intermediate representation (items, module tree, dep
 
 [dependencies]
 serde.workspace = true
+postcard.workspace = true
+ruzstd.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+zstd.workspace = true
