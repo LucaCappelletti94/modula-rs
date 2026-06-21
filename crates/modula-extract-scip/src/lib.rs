@@ -462,6 +462,60 @@ impl ScipIndexer for GoIndexer {
     }
 }
 
+/// The pinned `scip-java` version fetched via `coursier` when it is not on `PATH`.
+const SCIP_JAVA_VERSION: &str = "0.12.3";
+
+/// The JVM indexer, `scip-java` (Java, Kotlin, Scala, and other JVM languages).
+///
+/// It rides the project's own build tool (Maven, Gradle, or sbt) to compile
+/// with the semanticdb plugin, so the project must be buildable in the
+/// environment where indexing runs. `scip-java` reads the build from the current
+/// directory rather than a `--cwd` flag, so the command runs with `root` as its
+/// working directory. The fetch-and-run form uses `coursier` (`cs launch`),
+/// which is how `scip-java` is normally distributed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JvmIndexer;
+
+impl ScipIndexer for JvmIndexer {
+    fn detect(&self, root: &Path) -> bool {
+        root.join("pom.xml").is_file()
+            || root.join("build.gradle").is_file()
+            || root.join("build.gradle.kts").is_file()
+            || root.join("build.sbt").is_file()
+    }
+
+    fn command(&self, root: &Path, output: &Path) -> Option<Command> {
+        if on_path("scip-java") {
+            let mut command = Command::new("scip-java");
+            command
+                .current_dir(root)
+                .arg("index")
+                .arg("--output")
+                .arg(output);
+            Some(command)
+        } else if on_path("cs") {
+            let mut command = Command::new("cs");
+            command
+                .current_dir(root)
+                .arg("launch")
+                .arg(format!(
+                    "com.sourcegraph:scip-java_2.13:{SCIP_JAVA_VERSION}"
+                ))
+                .arg("--")
+                .arg("index")
+                .arg("--output")
+                .arg(output);
+            Some(command)
+        } else {
+            None
+        }
+    }
+
+    fn install_hint(&self) -> &'static str {
+        "install coursier (`cs`) so scip-java can be fetched, see https://get-coursier.io"
+    }
+}
+
 /// The indexer that recognizes the project at `root`, if any.
 #[must_use]
 pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
@@ -469,6 +523,7 @@ pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
         Box::new(TypeScriptIndexer),
         Box::new(PythonIndexer),
         Box::new(GoIndexer),
+        Box::new(JvmIndexer),
     ];
     indexers.into_iter().find(|indexer| indexer.detect(root))
 }
@@ -620,6 +675,57 @@ mod tests {
             assert!(
                 pkg_at < index_at,
                 "go run package spec must precede the index subcommand: {args:?}"
+            );
+        }
+    }
+
+    fn java_fixture() -> std::path::PathBuf {
+        [
+            env!("CARGO_MANIFEST_DIR"),
+            "tests",
+            "fixtures",
+            "sample-java",
+        ]
+        .iter()
+        .collect()
+    }
+
+    #[test]
+    fn jvm_indexer_detects_a_project() {
+        assert!(JvmIndexer.detect(&java_fixture()));
+        assert!(indexer_for(&java_fixture()).is_some());
+        assert!(!JvmIndexer.detect(Path::new("/nonexistent/place")));
+    }
+
+    #[test]
+    fn jvm_command_targets_the_output() {
+        let output = Path::new("/tmp/out.scip");
+        let Some(command) = JvmIndexer.command(&java_fixture(), output) else {
+            return; // Neither scip-java nor coursier (`cs`) on PATH in this environment.
+        };
+        let program = command.get_program().to_string_lossy().into_owned();
+        assert!(
+            program == "cs" || program == "scip-java",
+            "unexpected program {program}"
+        );
+        // scip-java reads the build from its working directory, not a flag.
+        assert_eq!(
+            command.get_current_dir(),
+            Some(java_fixture().as_path()),
+            "scip-java must run in the project root"
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let index_at = args.iter().position(|a| a == "index");
+        assert!(index_at.is_some(), "{args:?}");
+        assert!(args.iter().any(|a| a == "/tmp/out.scip"), "{args:?}");
+        if program == "cs" {
+            let pkg_at = args.iter().position(|a| a.contains("scip-java"));
+            assert!(
+                pkg_at < index_at,
+                "coursier artifact spec must precede the index subcommand: {args:?}"
             );
         }
     }
