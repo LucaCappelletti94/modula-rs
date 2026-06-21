@@ -55,6 +55,12 @@ struct Args {
     #[arg(long)]
     emit_ir: bool,
 
+    /// Also write the IR container to FILE during a normal scoring run, so a
+    /// caller (the CI action) can upload the IR without a second extraction.
+    /// Unlike `--emit-ir`, scoring, the report, and the gates still run.
+    #[arg(long, value_name = "FILE")]
+    emit_ir_to: Option<PathBuf>,
+
     /// Fail (non-zero exit) if the headline score is below this threshold.
     #[arg(long, value_name = "SCORE")]
     min_headline: Option<f64>,
@@ -117,15 +123,15 @@ fn run(args: &Args) -> anyhow::Result<bool> {
         }
     };
 
+    if let Some(path) = &args.emit_ir_to {
+        let bytes = encode_ir_container(&graph)?;
+        std::fs::write(path, &bytes)
+            .with_context(|| format!("writing IR to {}", path.display()))?;
+    }
+
     if args.emit_ir {
         use std::io::Write as _;
-        let payload = modula_ir::encode_compact(&graph).context("encoding IR")?;
-        let compressed = zstd::encode_all(payload.as_slice(), 19).context("compressing IR")?;
-        let bytes = modula_ir::wrap_container(
-            &compressed,
-            modula_ir::Codec::PostcardCompact,
-            modula_ir::Compression::Zstd,
-        );
+        let bytes = encode_ir_container(&graph)?;
         std::io::stdout()
             .write_all(&bytes)
             .context("writing IR container")?;
@@ -159,4 +165,16 @@ fn run(args: &Args) -> anyhow::Result<bool> {
         }
     }
     Ok(outcome.passed)
+}
+
+/// Encodes a graph as the compact, zstd-compressed binary IR container that the
+/// `modula-web` viewer and the portal consume.
+fn encode_ir_container(graph: &modula_ir::CrateGraph) -> anyhow::Result<Vec<u8>> {
+    let payload = modula_ir::encode_compact(graph).context("encoding IR")?;
+    let compressed = zstd::encode_all(payload.as_slice(), 19).context("compressing IR")?;
+    Ok(modula_ir::wrap_container(
+        &compressed,
+        modula_ir::Codec::PostcardCompact,
+        modula_ir::Compression::Zstd,
+    ))
 }

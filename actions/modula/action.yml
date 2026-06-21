@@ -86,6 +86,11 @@ runs:
         if [ -n "${{ inputs.max-overexposed }}" ]; then
           args+=(--max-overexposed "${{ inputs.max-overexposed }}")
         fi
+        # Emit the IR during this same scoring run so the upload step reuses it
+        # instead of extracting a second time. Skipped when upload is off.
+        if [ "${{ inputs.upload }}" != "false" ]; then
+          args+=(--emit-ir-to "${RUNNER_TEMP}/modula-ir.bin")
+        fi
         report="${RUNNER_TEMP}/modula-report.txt"
         set +e
         cargo-modula "${args[@]}" 2>&1 | tee "$report"
@@ -117,13 +122,12 @@ runs:
           echo "MODULA_TOKEN is not set, skipping upload."
           exit 0
         fi
-        # This re-runs extraction (the Score step already ran it once). It is a
-        # separate cargo-modula invocation because the CLI either scores or emits
-        # the IR, not both. If extraction fails here, skip the upload rather than
-        # POST a truncated payload.
+        # The Score step already wrote the IR here via --emit-ir-to, so there is
+        # no second extraction. If it is missing or empty (extraction failed),
+        # skip rather than POST a truncated payload.
         ir="${RUNNER_TEMP}/modula-ir.bin"
-        if ! cargo-modula modula "${{ inputs.path }}" --emit-ir > "$ir"; then
-          echo "::warning::skipping upload, --emit-ir failed."
+        if [ ! -s "$ir" ]; then
+          echo "::warning::no IR was emitted (analysis may have failed), skipping upload."
           exit 0
         fi
         url="${{ inputs.portal-url }}"

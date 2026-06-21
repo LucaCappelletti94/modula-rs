@@ -158,3 +158,30 @@ fn json_mode_gates_exit_code_without_printing_gates() {
         "gate block must be suppressed in JSON mode"
     );
 }
+
+#[test]
+#[ignore = "runs the full extractor; needs a toolchain"]
+fn emit_ir_to_writes_a_container_and_still_scores() {
+    // --emit-ir-to writes the IR as a side effect of a normal scoring run, so the
+    // report still prints and the gates still set the exit code. This is the
+    // single-extraction path the CI action relies on.
+    let ir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("emit-ir-to.bin");
+    let _ = std::fs::remove_file(&ir);
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-modula"))
+        .arg("modula")
+        .arg(spike_fixture())
+        .arg("--emit-ir-to")
+        .arg(&ir)
+        .args(["--min-headline", "0.0"])
+        .output()
+        .expect("run cargo-modula");
+    assert!(output.status.success(), "expected success exit");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Headline score"),
+        "scoring still runs: {stdout}"
+    );
+    let bytes = std::fs::read(&ir).expect("IR file written");
+    assert!(bytes.len() > 4, "IR container is non-empty");
+    assert_eq!(&bytes[..4], b"MIRz", "IR file is a container");
+}
