@@ -15,8 +15,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The tag is the single source of truth, but it must match the version declared
+  # in Cargo.toml so a release binary always reports the version it was tagged as.
+  # Tag a release as `v<workspace.package.version>` (for example v0.1.0).
+  verify-version:
+    name: Verify tag matches the crate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the tag to Cargo.toml
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml version: ${version}, tag: ${GITHUB_REF_NAME}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the Cargo.toml version ${version}. Tag the release as v${version}."
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.target }}
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
