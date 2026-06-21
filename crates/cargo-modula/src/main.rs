@@ -38,6 +38,13 @@ struct Args {
     #[arg(long)]
     workspace: bool,
 
+    /// Score a prebuilt SCIP index (`.scip`) instead of running extraction. This
+    /// is how non-Rust languages are analyzed: a SCIP indexer (run in CI or
+    /// locally) produces the index, and the IR is lowered from it, so no language
+    /// toolchain is needed here.
+    #[arg(long, value_name = "FILE")]
+    scip: Option<PathBuf>,
+
     /// Emit the machine-readable JSON report instead of the human report.
     #[arg(long)]
     json: bool,
@@ -75,23 +82,27 @@ fn main() -> ExitCode {
 
 /// Runs the analysis and prints the report. Returns whether the gates passed.
 fn run(args: &Args) -> anyhow::Result<bool> {
-    anyhow::ensure!(
-        args.path.exists(),
-        "path does not exist: {}",
-        args.path.display()
-    );
-    let request = ExtractRequest {
-        root: args.path.clone(),
-        language: None,
-        options: ExtractOptions {
-            include_dependencies: false,
-            member: args.package.clone(),
-            all_members: args.workspace,
-        },
+    let graph = if let Some(scip) = &args.scip {
+        modula_extract_scip::lower_path(scip).context("lowering SCIP index")?
+    } else {
+        anyhow::ensure!(
+            args.path.exists(),
+            "path does not exist: {}",
+            args.path.display()
+        );
+        let request = ExtractRequest {
+            root: args.path.clone(),
+            language: None,
+            options: ExtractOptions {
+                include_dependencies: false,
+                member: args.package.clone(),
+                all_members: args.workspace,
+            },
+        };
+        let mut registry = Registry::new();
+        registry.register(Box::new(RaExtractor));
+        registry.extract(&request).context("extraction failed")?
     };
-    let mut registry = Registry::new();
-    registry.register(Box::new(RaExtractor));
-    let graph = registry.extract(&request).context("extraction failed")?;
 
     if args.emit_ir {
         use std::io::Write as _;

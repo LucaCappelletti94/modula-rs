@@ -16,6 +16,7 @@ default-members = [
     "crates/modula-extract-api",
     "crates/modula-extract",
     "crates/modula-extract-ts",
+    "crates/modula-extract-scip",
     "crates/modula-metrics",
     "crates/cargo-modula",
 ]
@@ -34,6 +35,7 @@ authors = ["Luca Cappelletti <cappelletti.luca94@gmail.com>"]
 modula-ir = { path = "crates/modula-ir" }
 modula-extract-api = { path = "crates/modula-extract-api" }
 modula-extract = { path = "crates/modula-extract" }
+modula-extract-scip = { path = "crates/modula-extract-scip" }
 modula-metrics = { path = "crates/modula-metrics" }
 
 # Graph backend

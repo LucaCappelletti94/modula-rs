@@ -16,6 +16,7 @@ path = "src/main.rs"
 modula-ir.workspace = true
 modula-extract.workspace = true
 modula-extract-api.workspace = true
+modula-extract-scip.workspace = true
 modula-metrics.workspace = true
 clap.workspace = true
 anyhow.workspace = true
