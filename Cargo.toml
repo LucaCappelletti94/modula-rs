@@ -15,6 +15,7 @@ default-members = [
     "crates/modula-ir",
     "crates/modula-extract-api",
     "crates/modula-extract",
+    "crates/modula-extract-ts",
     "crates/modula-metrics",
     "crates/cargo-modula",
 ]
