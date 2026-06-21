@@ -59,6 +59,27 @@ fn builds_module_tree_and_items() {
 }
 
 #[test]
+fn records_import_edges_between_modules() {
+    use modula_ir::{ItemId, RefKind};
+
+    let graph = TsExtractor
+        .extract(&ExtractRequest::new(fixture()))
+        .expect("extract");
+    let module_path = |item: ItemId| {
+        graph
+            .module(graph.item(item).owning_module)
+            .canonical_path
+            .clone()
+    };
+    let has_edge = graph.edges.iter().any(|e| {
+        e.kind == RefKind::Import
+            && module_path(e.from).ends_with("::index")
+            && module_path(e.to).ends_with("::math")
+    });
+    assert!(has_edge, "expected an import edge from index to util/math");
+}
+
+#[test]
 fn analyzes_without_panicking() {
     use modula_metrics::analysis::{AnalysisConfig, analyze};
 
