@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 /// The IR schema version. Bumped when the shape of [`CrateGraph`] changes so
 /// that stale caches and snapshots self-invalidate.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The complete extracted representation of a workspace.
 ///
@@ -273,6 +273,7 @@ mod tests {
             crate_id: CrateId(0),
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         }
     }
 
@@ -369,6 +370,7 @@ mod tests {
             crate_id: CrateId(0),
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
         assert_eq!(g.items.len(), 5);
         // The four functions are real items; the module stub is not.

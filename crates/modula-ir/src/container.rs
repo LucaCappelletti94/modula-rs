@@ -39,7 +39,7 @@ pub const CONTAINER_MAGIC: [u8; 4] = *b"MIRz";
 /// The container framing version, distinct from
 /// [`SCHEMA_VERSION`](crate::SCHEMA_VERSION): this versions the on-disk envelope
 /// (header plus codec plus compression), not the logical shape of the graph.
-pub const FORMAT_VERSION: u8 = 1;
+pub const FORMAT_VERSION: u8 = 2;
 
 /// The number of header bytes before the payload: magic (4) plus three `u8`
 /// fields (format version, codec, compression).
@@ -227,6 +227,7 @@ struct CompactItem {
     crate_id: CrateId,
     has_canonical_path: bool,
     reachable_pub_api: bool,
+    visibility_fixed_by_trait: bool,
 }
 
 impl CompactGraph {
@@ -277,6 +278,7 @@ impl CompactGraph {
                         crate_id: it.crate_id,
                         has_canonical_path: it.has_canonical_path,
                         reachable_pub_api: it.reachable_pub_api,
+                        visibility_fixed_by_trait: it.visibility_fixed_by_trait,
                     }
                 })
                 .collect(),
@@ -328,6 +330,7 @@ impl CompactGraph {
                         crate_id: it.crate_id,
                         has_canonical_path: it.has_canonical_path,
                         reachable_pub_api: it.reachable_pub_api,
+                        visibility_fixed_by_trait: it.visibility_fixed_by_trait,
                     }
                 })
                 .collect();
@@ -446,6 +449,7 @@ mod tests {
                 crate_id: CrateId(0),
                 has_canonical_path: true,
                 reachable_pub_api: true,
+                visibility_fixed_by_trait: false,
             },
             // Normal method under the type container -> Leaf.
             Item {
@@ -457,6 +461,7 @@ mod tests {
                 crate_id: CrateId(0),
                 has_canonical_path: true,
                 reachable_pub_api: false,
+                visibility_fixed_by_trait: false,
             },
             // Synthetic path under k::a -> Leaf("{anon#0}").
             Item {
@@ -468,6 +473,7 @@ mod tests {
                 crate_id: CrateId(0),
                 has_canonical_path: false,
                 reachable_pub_api: false,
+                visibility_fixed_by_trait: false,
             },
             // Builtin type owned by the root, path not a suffix of "k" -> Full.
             Item {
@@ -479,6 +485,7 @@ mod tests {
                 crate_id: CrateId(0),
                 has_canonical_path: true,
                 reachable_pub_api: false,
+                visibility_fixed_by_trait: false,
             },
         ];
         CrateGraph {

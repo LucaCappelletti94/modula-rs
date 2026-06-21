@@ -148,6 +148,7 @@ impl CrateGraphBuilder {
             crate_id,
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
         self.register_item_key(key, item_id);
         (module_id, item_id)
@@ -174,6 +175,7 @@ impl CrateGraphBuilder {
             crate_id,
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
         self.register_item_key(key, id);
         id
@@ -265,6 +267,7 @@ impl CrateGraphBuilder {
             crate_id: m.crate_id,
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         };
         self.items.push(item);
         self.register_item_key(key, id);

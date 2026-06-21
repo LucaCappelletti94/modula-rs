@@ -42,6 +42,7 @@ fn build(modules: &[ModuleSpec], items: &[ItemSpec], edges: &[(usize, usize)]) -
             crate_id: krate,
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         })
         .collect();
     let edges = edges

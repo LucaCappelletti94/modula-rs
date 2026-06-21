@@ -570,6 +570,7 @@ mod tests {
             crate_id: CrateId(0),
             has_canonical_path: true,
             reachable_pub_api: pub_api,
+            visibility_fixed_by_trait: false,
         }
     }
 

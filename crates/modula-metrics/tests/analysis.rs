@@ -97,6 +97,7 @@ fn flat_single_module_crate_has_na_headline() {
         crate_id: krate,
         has_canonical_path: true,
         reachable_pub_api: false,
+        visibility_fixed_by_trait: false,
     };
     let body = |from: u32, to: u32| Edge {
         from: ItemId(from),
@@ -162,6 +163,7 @@ fn graph_with_module_items_scores_cleanly() {
         crate_id: krate,
         has_canonical_path: true,
         reachable_pub_api: false,
+        visibility_fixed_by_trait: false,
     };
     let ir = CrateGraph {
         schema_version: SCHEMA_VERSION,

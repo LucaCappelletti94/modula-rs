@@ -125,6 +125,7 @@ mod tests {
                 crate_id: CrateId(0),
                 has_canonical_path: true,
                 reachable_pub_api: false,
+                visibility_fixed_by_trait: false,
             })
             .collect();
         let edges = items

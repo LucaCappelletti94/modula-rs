@@ -68,4 +68,11 @@ pub struct Item {
     /// the crate root, i.e. part of the intended public API. The over-exposure
     /// metric treats such items as intentionally exposed.
     pub reachable_pub_api: bool,
+    /// `true` when the item is an associated item whose visibility is dictated by
+    /// a trait (a member of a trait `impl`, or a trait's own associated item), so
+    /// its visibility cannot be narrowed independently of the trait. The
+    /// over-exposure metric must not flag such items, since the author cannot act
+    /// on them. Always `false` for languages lowered through SCIP, which does not
+    /// model trait membership.
+    pub visibility_fixed_by_trait: bool,
 }

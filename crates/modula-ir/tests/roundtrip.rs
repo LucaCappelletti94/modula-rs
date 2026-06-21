@@ -68,6 +68,7 @@ fn sample() -> CrateGraph {
                 crate_id: krate,
                 has_canonical_path: true,
                 reachable_pub_api: false,
+                visibility_fixed_by_trait: false,
             },
             Item {
                 id: modula_ir::ItemId(1),
@@ -78,6 +79,7 @@ fn sample() -> CrateGraph {
                 crate_id: krate,
                 has_canonical_path: true,
                 reachable_pub_api: false,
+                visibility_fixed_by_trait: false,
             },
         ],
         edges: vec![Edge {
@@ -149,6 +151,7 @@ fn public_api_requires_a_pub_chain_to_the_root() {
         crate_id: krate,
         has_canonical_path: true,
         reachable_pub_api: false,
+        visibility_fixed_by_trait: false,
     };
     let mut graph = CrateGraph {
         schema_version: SCHEMA_VERSION,

@@ -298,6 +298,7 @@ impl<'db> Builder<'db> {
             crate_id,
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
 
         for def in module.declarations(self.db) {
@@ -334,6 +335,11 @@ impl<'db> Builder<'db> {
             let self_type_id =
                 self_adt.and_then(|adt| self.item_ids.get(&ModuleDef::from(adt)).copied());
 
+            // Members of a trait impl take their visibility from the trait and
+            // cannot be narrowed, so the over-exposure metric must skip them.
+            // Inherent impl methods carry no trait and stay narrowable.
+            let is_trait_impl = imp.trait_(self.db).is_some();
+
             for assoc in imp.items(self.db) {
                 let def = match assoc {
                     AssocItem::Function(f) => ModuleDef::Function(f),
@@ -341,8 +347,13 @@ impl<'db> Builder<'db> {
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
                 self.add_item(def, crate_id, owning, module, edition, self_name.as_deref());
-                if let (Some(type_id), Some(&assoc_id)) = (self_type_id, self.item_ids.get(&def)) {
-                    self.assoc_owner.insert(assoc_id, type_id);
+                if let Some(&assoc_id) = self.item_ids.get(&def) {
+                    if let Some(type_id) = self_type_id {
+                        self.assoc_owner.insert(assoc_id, type_id);
+                    }
+                    if is_trait_impl {
+                        self.items[assoc_id.index()].visibility_fixed_by_trait = true;
+                    }
                 }
             }
 
@@ -400,9 +411,14 @@ impl<'db> Builder<'db> {
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
                 self.add_item(def, crate_id, owning, module, edition, Some(&trait_name));
-                // Default trait methods/consts/types cluster with the trait.
-                if let (Some(type_id), Some(&assoc_id)) = (trait_id, self.item_ids.get(&def)) {
-                    self.assoc_owner.insert(assoc_id, type_id);
+                if let Some(&assoc_id) = self.item_ids.get(&def) {
+                    // Default trait methods/consts/types cluster with the trait.
+                    if let Some(type_id) = trait_id {
+                        self.assoc_owner.insert(assoc_id, type_id);
+                    }
+                    // A trait's own items take their visibility from the trait, so
+                    // they are not independently narrowable either.
+                    self.items[assoc_id.index()].visibility_fixed_by_trait = true;
                 }
             }
         }
@@ -517,6 +533,7 @@ impl<'db> Builder<'db> {
             crate_id,
             has_canonical_path,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
 
         match def {

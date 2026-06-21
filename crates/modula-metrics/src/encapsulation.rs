@@ -108,6 +108,11 @@ fn over_exposed(ir: &CrateGraph) -> Vec<OverExposure> {
             // Intended public API: over-exposure is advisory, so do not flag it.
             continue;
         }
+        if item.visibility_fixed_by_trait {
+            // A trait impl member or trait associated item: its visibility follows
+            // the trait and cannot be narrowed, so flagging it is a false positive.
+            continue;
+        }
         let required = required_visibility(ir, item.id, &consumers[item.id.index()]);
         if item.visibility.restrictiveness() > required.restrictiveness() {
             result.push(OverExposure {
@@ -296,6 +301,7 @@ mod tests {
                 crate_id: CrateId(0),
                 has_canonical_path: true,
                 reachable_pub_api,
+                visibility_fixed_by_trait: false,
             })
             .collect();
         CrateGraph {
@@ -354,6 +360,38 @@ mod tests {
         assert_eq!(report.n_cross_module_refs, 1);
         assert!(report.leaks.is_empty(), "API target is not a leak");
         assert_eq!(report.mean_leak_cost, 0.0);
+    }
+
+    #[test]
+    fn trait_dictated_item_is_not_over_exposed() {
+        // One module with two public items and a Body edge item0 -> item1. Both
+        // are used only within their module (or not at all) and are not public
+        // API, so over-exposure flags both.
+        let mut g = crate_with(
+            &[(None, 0, ModuleKind::Mod)],
+            &[
+                (0, ItemKind::Function, false),
+                (0, ItemKind::AssocFn, false),
+            ],
+        );
+        let flagged: Vec<ItemId> = super::over_exposed(&g).iter().map(|o| o.item).collect();
+        assert!(
+            flagged.contains(&ItemId(1)),
+            "a narrowable item used only locally is over-exposed"
+        );
+
+        // Marking item1 as trait-dictated (its visibility follows a trait, so it
+        // cannot be narrowed) removes it from the over-exposed set. item0 stays.
+        g.items[1].visibility_fixed_by_trait = true;
+        let flagged: Vec<ItemId> = super::over_exposed(&g).iter().map(|o| o.item).collect();
+        assert!(
+            !flagged.contains(&ItemId(1)),
+            "a trait-dictated item must not be flagged over-exposed"
+        );
+        assert!(
+            flagged.contains(&ItemId(0)),
+            "a normal item is still flagged"
+        );
     }
 
     #[test]
