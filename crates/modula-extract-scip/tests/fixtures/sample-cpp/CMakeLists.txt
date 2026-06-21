@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.16)
+project(sample_cpp CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(sample_cpp
+  main.cpp
+  mathx/mathx.cpp
+  app/app.cpp)
+target_include_directories(sample_cpp PRIVATE ${CMAKE_SOURCE_DIR})

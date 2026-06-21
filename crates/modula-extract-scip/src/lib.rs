@@ -608,6 +608,53 @@ impl ScipIndexer for DotNetIndexer {
     }
 }
 
+/// The C and C++ indexer, `scip-clang`.
+///
+/// It indexes from a JSON compilation database (`compile_commands.json`), which
+/// the project's build system emits (CMake with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`,
+/// or Bazel/Meson). Like `scip-dotnet` there is no ephemeral runner: `scip-clang`
+/// is a prebuilt binary, so when it is not on `PATH` the command is `None`. It
+/// must run from the project root, so the command sets `root` as its working
+/// directory and points `--compdb-path` at the database (checked in the root and
+/// in a `build/` subdirectory). `scip-clang` does not emit definition enclosing
+/// ranges, so edges come from the lowering's nearest-definition fallback.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CppIndexer;
+
+impl CppIndexer {
+    /// The compilation database location, if present, relative to `root`.
+    fn compdb(root: &Path) -> Option<&'static str> {
+        ["compile_commands.json", "build/compile_commands.json"]
+            .into_iter()
+            .find(|rel| root.join(rel).is_file())
+    }
+}
+
+impl ScipIndexer for CppIndexer {
+    fn detect(&self, root: &Path) -> bool {
+        Self::compdb(root).is_some() || root.join("CMakeLists.txt").is_file()
+    }
+
+    fn command(&self, root: &Path, output: &Path) -> Option<Command> {
+        if !on_path("scip-clang") {
+            return None;
+        }
+        // Without a compilation database scip-clang cannot run, so the caller
+        // surfaces the install hint, which explains how to produce one.
+        let compdb = Self::compdb(root)?;
+        let mut command = Command::new("scip-clang");
+        command
+            .current_dir(root)
+            .arg(format!("--compdb-path={compdb}"))
+            .arg(format!("--index-output-path={}", output.display()));
+        Some(command)
+    }
+
+    fn install_hint(&self) -> &'static str {
+        "install scip-clang from github.com/sourcegraph/scip-clang and emit a compile_commands.json (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)"
+    }
+}
+
 /// The indexer that recognizes the project at `root`, if any.
 #[must_use]
 pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
@@ -617,6 +664,7 @@ pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
         Box::new(GoIndexer),
         Box::new(JvmIndexer),
         Box::new(DotNetIndexer),
+        Box::new(CppIndexer),
     ];
     indexers.into_iter().find(|indexer| indexer.detect(root))
 }
@@ -866,5 +914,38 @@ mod tests {
             .collect();
         assert!(args.iter().any(|a| a == "index"), "{args:?}");
         assert!(args.iter().any(|a| a == "/tmp/out.scip"), "{args:?}");
+    }
+
+    fn cpp_fixture() -> std::path::PathBuf {
+        [
+            env!("CARGO_MANIFEST_DIR"),
+            "tests",
+            "fixtures",
+            "sample-cpp",
+        ]
+        .iter()
+        .collect()
+    }
+
+    #[test]
+    fn cpp_indexer_detects_a_project() {
+        // The fixture has a CMakeLists.txt (the committed index needs no compdb).
+        assert!(CppIndexer.detect(&cpp_fixture()));
+        assert!(indexer_for(&cpp_fixture()).is_some());
+        assert!(!CppIndexer.detect(Path::new("/nonexistent/place")));
+        // A Go project carries no CMakeLists.txt or compilation database.
+        assert!(!CppIndexer.detect(&go_fixture()));
+    }
+
+    #[test]
+    fn cpp_command_needs_a_compilation_database() {
+        // The committed fixture has no compile_commands.json, so even if
+        // scip-clang were on PATH there is nothing to index and no command.
+        assert!(
+            CppIndexer
+                .command(&cpp_fixture(), Path::new("/tmp/out.scip"))
+                .is_none(),
+            "without a compilation database the command must be None"
+        );
     }
 }
