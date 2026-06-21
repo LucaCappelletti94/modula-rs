@@ -93,6 +93,21 @@ jobs:
       - name: Build pure crates on the MSRV toolchain
         run: cargo check -p modula-ir -p modula-metrics --all-targets
 
+  # Lints the GitHub Actions workflows themselves (expression typos, unknown
+  # runner labels, and shellcheck over every `run:` block). actionlint does not
+  # lint composite action metadata, so actions/modula/action.yml is covered by
+  # its own shell checks rather than here.
+  actions:
+    name: Actions (actionlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint
+      - name: Lint workflows
+        run: actionlint
+
   # Source hygiene: unused dependencies (cargo machete) and typos. Neither builds
   # the project, so this job is quick.
   hygiene:
