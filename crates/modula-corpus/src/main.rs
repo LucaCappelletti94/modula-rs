@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod convert;
 mod db;
 mod dump;
 mod embed;
@@ -64,6 +65,18 @@ enum Command {
         root: PathBuf,
         #[arg(long, default_value = "corpus.db")]
         db: String,
+    },
+    /// Convert legacy `.ir.json` IR dumps to the binary `.bin.zst` container.
+    Convert {
+        #[arg(long, default_value = DEFAULT_ROOT)]
+        root: PathBuf,
+        #[arg(long, default_value = "corpus.db")]
+        db: String,
+        #[arg(
+            long,
+            help = "convert a single standalone .ir.json file, not the corpus"
+        )]
+        file: Option<PathBuf>,
     },
     /// Backfill crates.io metadata (release date) onto existing extraction rows.
     Meta {
@@ -126,6 +139,11 @@ fn main() -> Result<()> {
             limit,
         }),
         Command::Sweep { root, db } => sweep::run(&sweep::SweepArgs { root, db_path: db }),
+        Command::Convert { root, db, file } => convert::run(&convert::ConvertArgs {
+            root,
+            db_path: db,
+            file,
+        }),
         Command::Meta {
             root,
             db,

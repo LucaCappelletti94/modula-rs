@@ -32,7 +32,9 @@ use modula_ir::{
     ModuleId, ModuleKind, RefKind, SCHEMA_VERSION, Visibility,
 };
 
-use crate::{ExtractOptions, Extractor};
+use std::path::{Path, PathBuf};
+
+use modula_extract_api::{ExtractRequest, Extractor, Language, Rust};
 
 /// rust-analyzer version this extractor is pinned against, recorded in the IR
 /// for provenance and cache invalidation.
@@ -42,8 +44,56 @@ const RA_VERSION: &str = "0.0.336";
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RaExtractor;
 
+/// Rust-specific selection, derived from a language-neutral [`ExtractRequest`].
+struct RustOptions {
+    manifest_path: PathBuf,
+    package: Option<String>,
+    workspace: bool,
+}
+
+// `RaExtractor` implements `Extractor` directly because rust-analyzer already
+// hands it a fully resolved model, so it does not use the `Frontend` plus builder
+// path. Do not also implement `Frontend` for it: the blanket
+// `impl<F: Frontend> Extractor for F` would then overlap this impl (E0119).
 impl Extractor for RaExtractor {
-    fn extract(&self, opts: &ExtractOptions) -> anyhow::Result<CrateGraph> {
+    fn language_id(&self) -> &'static str {
+        Rust::ID
+    }
+
+    fn detect(&self, root: &Path) -> bool {
+        root.join("Cargo.toml").is_file()
+            || (root.is_file() && root.file_name().is_some_and(|n| n == "Cargo.toml"))
+    }
+
+    fn extract(&self, req: &ExtractRequest) -> anyhow::Result<CrateGraph> {
+        let opts = RustOptions {
+            manifest_path: resolve_manifest(&req.root)?,
+            package: req.options.member.clone(),
+            workspace: req.options.all_members,
+        };
+        self.extract_rust(&opts)
+    }
+}
+
+/// Resolves a user path (a directory or a `Cargo.toml`) to a manifest path.
+fn resolve_manifest(root: &Path) -> anyhow::Result<PathBuf> {
+    if root.is_dir() {
+        let manifest = root.join("Cargo.toml");
+        anyhow::ensure!(
+            manifest.is_file(),
+            "no Cargo.toml found in {}",
+            root.display()
+        );
+        Ok(manifest)
+    } else if root.is_file() {
+        Ok(root.to_path_buf())
+    } else {
+        anyhow::bail!("path does not exist: {}", root.display())
+    }
+}
+
+impl RaExtractor {
+    fn extract_rust(&self, opts: &RustOptions) -> anyhow::Result<CrateGraph> {
         // The sysroot is always enabled so std-library generic wrappers (`Vec`,
         // `Option`, `Box`, `Result`, ...) resolve. This lets the type walk
         // descend into a local type argument like `Vec<Local>` and emit the edge
@@ -248,6 +298,7 @@ impl<'db> Builder<'db> {
             crate_id,
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
 
         for def in module.declarations(self.db) {
@@ -284,6 +335,11 @@ impl<'db> Builder<'db> {
             let self_type_id =
                 self_adt.and_then(|adt| self.item_ids.get(&ModuleDef::from(adt)).copied());
 
+            // Members of a trait impl take their visibility from the trait and
+            // cannot be narrowed, so the over-exposure metric must skip them.
+            // Inherent impl methods carry no trait and stay narrowable.
+            let is_trait_impl = imp.trait_(self.db).is_some();
+
             for assoc in imp.items(self.db) {
                 let def = match assoc {
                     AssocItem::Function(f) => ModuleDef::Function(f),
@@ -291,8 +347,13 @@ impl<'db> Builder<'db> {
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
                 self.add_item(def, crate_id, owning, module, edition, self_name.as_deref());
-                if let (Some(type_id), Some(&assoc_id)) = (self_type_id, self.item_ids.get(&def)) {
-                    self.assoc_owner.insert(assoc_id, type_id);
+                if let Some(&assoc_id) = self.item_ids.get(&def) {
+                    if let Some(type_id) = self_type_id {
+                        self.assoc_owner.insert(assoc_id, type_id);
+                    }
+                    if is_trait_impl {
+                        self.items[assoc_id.index()].visibility_fixed_by_trait = true;
+                    }
                 }
             }
 
@@ -350,9 +411,14 @@ impl<'db> Builder<'db> {
                     AssocItem::TypeAlias(t) => ModuleDef::TypeAlias(t),
                 };
                 self.add_item(def, crate_id, owning, module, edition, Some(&trait_name));
-                // Default trait methods/consts/types cluster with the trait.
-                if let (Some(type_id), Some(&assoc_id)) = (trait_id, self.item_ids.get(&def)) {
-                    self.assoc_owner.insert(assoc_id, type_id);
+                if let Some(&assoc_id) = self.item_ids.get(&def) {
+                    // Default trait methods/consts/types cluster with the trait.
+                    if let Some(type_id) = trait_id {
+                        self.assoc_owner.insert(assoc_id, type_id);
+                    }
+                    // A trait's own items take their visibility from the trait, so
+                    // they are not independently narrowable either.
+                    self.items[assoc_id.index()].visibility_fixed_by_trait = true;
                 }
             }
         }
@@ -467,6 +533,7 @@ impl<'db> Builder<'db> {
             crate_id,
             has_canonical_path,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
 
         match def {
@@ -973,7 +1040,7 @@ fn absolute_manifest(path: &std::path::Path) -> anyhow::Result<AbsPathBuf> {
 fn select_targets(
     workspace: &ProjectWorkspace,
     manifest_abs: &AbsPathBuf,
-    opts: &ExtractOptions,
+    opts: &RustOptions,
 ) -> anyhow::Result<Selection> {
     let cargo = match &workspace.kind {
         ProjectWorkspaceKind::Cargo { cargo, .. } => cargo,

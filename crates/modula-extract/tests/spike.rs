@@ -7,7 +7,8 @@
 
 use std::path::PathBuf;
 
-use modula_extract::{ExtractOptions, Extractor, RaExtractor};
+use modula_extract::RaExtractor;
+use modula_extract_api::{ExtractRequest, Extractor};
 use modula_ir::{CrateGraph, RefKind};
 
 fn fixture_manifest(name: &str) -> PathBuf {
@@ -22,11 +23,8 @@ fn fixture_manifest(name: &str) -> PathBuf {
     .collect()
 }
 
-fn opts(name: &str) -> ExtractOptions {
-    ExtractOptions {
-        manifest_path: fixture_manifest(name),
-        ..Default::default()
-    }
+fn opts(name: &str) -> ExtractRequest {
+    ExtractRequest::new(fixture_manifest(name))
 }
 
 /// A normalized, id-independent view of the IR for stable snapshots: paths

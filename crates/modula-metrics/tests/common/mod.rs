@@ -53,6 +53,7 @@ pub fn two_module_graph(n: usize, module_of: &[usize], edges: &[(usize, usize)])
             crate_id: krate,
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         })
         .collect();
     let edges = edges

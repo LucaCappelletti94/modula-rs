@@ -1,0 +1,20 @@
+[package]
+name = "modula-extract-scip"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Lowers a SCIP code index into the modula-rs IR, the basis for analyzing any language with a SCIP indexer."
+
+[dependencies]
+modula-ir.workspace = true
+modula-extract-api.workspace = true
+anyhow.workspace = true
+scip = "0.8"
+protobuf = "=3.7.2"
+tempfile = "3"
+
+[dev-dependencies]
+modula-metrics.workspace = true

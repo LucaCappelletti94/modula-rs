@@ -19,6 +19,7 @@ ignored = ["libsqlite3-sys"]
 [dependencies]
 modula-ir.workspace = true
 modula-extract.workspace = true
+modula-extract-api.workspace = true
 modula-metrics.workspace = true
 
 serde_json.workspace = true
@@ -37,6 +38,7 @@ libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
 native-tls = "0.2"
 flate2 = "1"
+zstd.workspace = true
 tar = "0.4"
 csv = "1.3"
 

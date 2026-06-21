@@ -4,12 +4,13 @@
 //! Invoked as a cargo subcommand (`cargo modula [PATH]`) or directly
 //! (`cargo-modula modula [PATH]`).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context as _;
 use clap::Parser;
-use modula_extract::{ExtractOptions, Extractor, RaExtractor};
+use modula_extract::RaExtractor;
+use modula_extract_api::{ExtractOptions, ExtractRequest, Registry};
 use modula_metrics::analysis::{AnalysisConfig, analyze};
 use modula_metrics::report::{Gates, evaluate_gates, to_human, to_json};
 
@@ -37,9 +38,28 @@ struct Args {
     #[arg(long)]
     workspace: bool,
 
+    /// Score a prebuilt SCIP index (`.scip`) instead of running extraction. This
+    /// is how non-Rust languages are analyzed: a SCIP indexer (run in CI or
+    /// locally) produces the index, and the IR is lowered from it, so no language
+    /// toolchain is needed here.
+    #[arg(long, value_name = "FILE")]
+    scip: Option<PathBuf>,
+
     /// Emit the machine-readable JSON report instead of the human report.
     #[arg(long)]
     json: bool,
+
+    /// Emit the extracted IR (the `CrateGraph`) as a compact binary container and
+    /// exit, without scoring. This is the input the `modula-web` report viewer
+    /// consumes. The bytes go to stdout, so redirect them to a file.
+    #[arg(long)]
+    emit_ir: bool,
+
+    /// Also write the IR container to FILE during a normal scoring run, so a
+    /// caller (the CI action) can upload the IR without a second extraction.
+    /// Unlike `--emit-ir`, scoring, the report, and the gates still run.
+    #[arg(long, value_name = "FILE")]
+    emit_ir_to: Option<PathBuf>,
 
     /// Fail (non-zero exit) if the headline score is below this threshold.
     #[arg(long, value_name = "SCORE")]
@@ -57,26 +77,67 @@ struct Args {
 fn main() -> ExitCode {
     let Cargo::Modula(args) = Cargo::parse();
     match run(&args) {
+        // Exit 0 when the gates pass, 1 when a gate fails, and 2 when the tool
+        // itself errors. The distinct error code lets callers (the CI action)
+        // tell a low score from a failure to analyze at all.
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) => {
             eprintln!("error: {error:#}");
-            ExitCode::FAILURE
+            ExitCode::from(2)
         }
     }
 }
 
 /// Runs the analysis and prints the report. Returns whether the gates passed.
 fn run(args: &Args) -> anyhow::Result<bool> {
-    let manifest_path = resolve_manifest(&args.path)?;
+    let graph = if let Some(scip) = &args.scip {
+        modula_extract_scip::lower_path(scip).context("lowering SCIP index")?
+    } else {
+        anyhow::ensure!(
+            args.path.exists(),
+            "path does not exist: {}",
+            args.path.display()
+        );
+        let mut registry = Registry::new();
+        registry.register(Box::new(RaExtractor));
+        if registry.detect(&args.path).is_some() {
+            let request = ExtractRequest {
+                root: args.path.clone(),
+                language: None,
+                options: ExtractOptions {
+                    include_dependencies: false,
+                    member: args.package.clone(),
+                    all_members: args.workspace,
+                },
+            };
+            registry.extract(&request).context("extraction failed")?
+        } else if let Some(indexer) = modula_extract_scip::indexer_for(&args.path) {
+            modula_extract_scip::run_indexer(indexer.as_ref(), &args.path)
+                .context("indexing failed")?
+        } else {
+            anyhow::bail!(
+                "could not detect a supported project at {}",
+                args.path.display()
+            )
+        }
+    };
 
-    let graph = RaExtractor
-        .extract(&ExtractOptions {
-            manifest_path,
-            package: args.package.clone(),
-            workspace: args.workspace,
-        })
-        .context("extraction failed")?;
+    if let Some(path) = &args.emit_ir_to {
+        let bytes = encode_ir_container(&graph)?;
+        std::fs::write(path, &bytes)
+            .with_context(|| format!("writing IR to {}", path.display()))?;
+    }
+
+    if args.emit_ir {
+        use std::io::Write as _;
+        let bytes = encode_ir_container(&graph)?;
+        std::io::stdout()
+            .write_all(&bytes)
+            .context("writing IR container")?;
+        return Ok(true);
+    }
+
     let result = analyze(&graph, &AnalysisConfig::default()).context("analysis failed")?;
 
     if args.json {
@@ -106,19 +167,14 @@ fn run(args: &Args) -> anyhow::Result<bool> {
     Ok(outcome.passed)
 }
 
-/// Resolves a user-supplied path to a `Cargo.toml`.
-fn resolve_manifest(path: &Path) -> anyhow::Result<PathBuf> {
-    if path.is_dir() {
-        let manifest = path.join("Cargo.toml");
-        anyhow::ensure!(
-            manifest.is_file(),
-            "no Cargo.toml found in {}",
-            path.display()
-        );
-        Ok(manifest)
-    } else if path.is_file() {
-        Ok(path.to_path_buf())
-    } else {
-        anyhow::bail!("path does not exist: {}", path.display())
-    }
+/// Encodes a graph as the compact, zstd-compressed binary IR container that the
+/// `modula-web` viewer and the portal consume.
+fn encode_ir_container(graph: &modula_ir::CrateGraph) -> anyhow::Result<Vec<u8>> {
+    let payload = modula_ir::encode_compact(graph).context("encoding IR")?;
+    let compressed = zstd::encode_all(payload.as_slice(), 19).context("compressing IR")?;
+    Ok(modula_ir::wrap_container(
+        &compressed,
+        modula_ir::Codec::PostcardCompact,
+        modula_ir::Compression::Zstd,
+    ))
 }

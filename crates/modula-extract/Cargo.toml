@@ -10,6 +10,7 @@ description = "rust-analyzer based extraction of the modula-rs intermediate repr
 
 [dependencies]
 modula-ir.workspace = true
+modula-extract-api.workspace = true
 anyhow.workspace = true
 
 # rust-analyzer as a library. These are the only heavy/unstable dependencies in

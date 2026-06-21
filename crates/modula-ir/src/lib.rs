@@ -3,8 +3,10 @@
 //!
 //! This crate is the firewall between the unstable rust-analyzer based
 //! extraction (`modula-extract`) and the pure metric layer (`modula-metrics`).
-//! It depends only on `serde`, so the metric layer can be built and tested on
-//! hand-written IR with no rust-analyzer involved.
+//! It pulls in no rust-analyzer code, only `serde` plus serialization and
+//! decompression codecs (the binary IR container), so the metric layer can be built
+//! and tested on hand-written IR, and the whole crate compiles to
+//! `wasm32-unknown-unknown` for the web viewer.
 //!
 //! The central type is [`CrateGraph`]: a flat, serializable bundle of crates,
 //! modules, items, and directed dependency edges. The `parent` links on
@@ -13,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 
+mod container;
 mod edge;
 mod ids;
 mod item;
@@ -20,6 +23,10 @@ mod krate;
 mod module;
 mod visibility;
 
+pub use container::{
+    CONTAINER_MAGIC, Codec, Compression, ContainerError, FORMAT_VERSION, decode_compact,
+    encode_compact, read_container, wrap_container,
+};
 pub use edge::{Edge, RefKind};
 pub use ids::{CrateId, ItemId, ModuleId};
 pub use item::{Item, ItemKind};
@@ -33,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 /// The IR schema version. Bumped when the shape of [`CrateGraph`] changes so
 /// that stale caches and snapshots self-invalidate.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The complete extracted representation of a workspace.
 ///
@@ -266,6 +273,7 @@ mod tests {
             crate_id: CrateId(0),
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         }
     }
 
@@ -362,6 +370,7 @@ mod tests {
             crate_id: CrateId(0),
             has_canonical_path: true,
             reachable_pub_api: false,
+            visibility_fixed_by_trait: false,
         });
         assert_eq!(g.items.len(), 5);
         // The four functions are real items; the module stub is not.

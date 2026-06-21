@@ -12,6 +12,7 @@ pub mod cohesion;
 pub mod coupling;
 pub mod cycles;
 pub mod encapsulation;
+pub mod findings;
 pub mod graph;
 pub mod module_graph;
 pub mod report;

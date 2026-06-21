@@ -204,6 +204,7 @@ mod tests {
             crate_id: CrateId(0),
             has_canonical_path: true,
             reachable_pub_api: true,
+            visibility_fixed_by_trait: false,
         };
         ir.items = vec![
             item(0, 0, ItemKind::Trait),

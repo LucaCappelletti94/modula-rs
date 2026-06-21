@@ -1,0 +1,84 @@
+name: Release
+
+# Builds the cargo-modula binary for every supported runner target and attaches
+# the archives to the GitHub Release for the pushed tag. The composite action in
+# actions/modula downloads these archives, so a tag must be pushed before the
+# action can run against that version.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The tag is the single source of truth, but it must match the version declared
+  # in Cargo.toml so a release binary always reports the version it was tagged as.
+  # Tag a release as `v<workspace.package.version>` (for example v0.1.0).
+  verify-version:
+    name: Verify tag matches the crate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the tag to Cargo.toml
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml version: ${version}, tag: ${GITHUB_REF_NAME}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the Cargo.toml version ${version}. Tag the release as v${version}."
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          # Both macOS targets build on the arm64 runner. The x86_64 one
+          # cross-compiles, which links cleanly because the macOS SDK is
+          # universal. This avoids depending on a retired Intel runner label.
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release -p cargo-modula --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          archive="cargo-modula-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release" cargo-modula
+          echo "ASSET=$archive" >> "$GITHUB_ENV"
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "cargo-modula-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/cargo-modula.exe" -DestinationPath $archive
+          "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          fail_on_unmatched_files: true

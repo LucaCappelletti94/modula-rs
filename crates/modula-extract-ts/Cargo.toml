@@ -1,0 +1,25 @@
+[package]
+name = "modula-extract-ts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "TypeScript and JavaScript extraction of the modula-rs IR, built on the oxc parser."
+
+[dependencies]
+modula-ir.workspace = true
+modula-extract-api.workspace = true
+anyhow.workspace = true
+oxc_allocator = "0.137"
+oxc_parser = "0.137"
+oxc_ast = "0.137"
+oxc_ast_visit = "0.137"
+oxc_semantic = "0.137"
+oxc_span = "0.137"
+oxc_resolver = "11"
+walkdir = "2"
+
+[dev-dependencies]
+modula-metrics.workspace = true

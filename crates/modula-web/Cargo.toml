@@ -1,0 +1,24 @@
+# Standalone workspace: kept out of the main workspace so its large browser-side
+# dependency tree does not enter the native build or the clippy/audit/deny gates.
+# Build and serve with `dx serve` (the Dioxus CLI), not plain `cargo`.
+[workspace]
+
+[package]
+name = "modula-web"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/LucaCappelletti94/modula-rs"
+authors = ["Luca Cappelletti <cappelletti.luca94@gmail.com>"]
+description = "Web report viewer for modula-rs: runs the scoring core in wasm over an uploaded crate IR."
+
+[[bin]]
+name = "modula-web"
+path = "src/main.rs"
+
+[dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+dioxus-free-icons = { version = "0.10", features = ["font-awesome-solid"] }
+modula-ir = { path = "../modula-ir" }
+modula-metrics = { path = "../modula-metrics" }
