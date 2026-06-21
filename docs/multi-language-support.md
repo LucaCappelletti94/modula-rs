@@ -2,94 +2,60 @@
 
 ## Context and goal
 
-modula currently scores only Rust crates. Supporting Rust alone caps the potential user base sharply, so the goal is to let modula analyze code written in other languages. The same score, findings, report, and the planned hosted service then apply to any supported language.
+modula scores only Rust today, which caps the audience sharply. The goal is to analyze other languages by producing the same `modula_ir::CrateGraph`, so the metrics, findings, report, and the planned web service all apply unchanged. `modula-metrics` is language-agnostic: it only ever sees a `CrateGraph` (a module tree, items carrying visibility and an owning module, and directed dependency edges). Rust support is just one producer of that IR, the `RaExtractor` in `modula-extract`. Adding a language means adding another producer of the same IR.
 
-This is tractable because of where the seam already sits. `modula-metrics` is language-agnostic: it only ever sees a `modula_ir::CrateGraph` (a module tree, items carrying visibility and an owning module, and directed dependency edges). Rust support is just one producer of that IR, the `RaExtractor` in `modula-extract`, which is the only crate that touches rust-analyzer. Adding a language therefore means adding a new producer of the same `CrateGraph`. Scoring, findings, the report, and the future web service come along unchanged.
+## Strategy: SCIP for non-Rust languages, rust-analyzer for Rust
 
-## Scope: Rust-native languages only
+A survey of the tooling concluded that the only scalable way to get type-resolved graphs across many languages is SCIP (Sourcegraph's protobuf code-index format): write one SCIP-to-`CrateGraph` lowering in Rust, and rely on each language's existing indexer, which rides that language's real compiler, to produce the index. One lowering then covers every language that has an indexer (`scip-typescript`, `scip-python`, `scip-go`, `scip-java`, a Roslyn-based C# indexer, `scip-clang`).
 
-A survey of the available tooling (recorded in the project research) showed that only three languages have mature Rust-native semantic analysis: Rust, JavaScript and TypeScript (via `oxc`), and Python (via Astral's `ruff` and `ty`). These keep the whole pipeline in Rust, with no foreign toolchain, and can compute a module-level graph from source alone with no install, which suits scale and the free upload and open-source tiers.
+Rust stays on its bespoke rust-analyzer extractor, because SCIP is verifiably lossy for Rust. We confirmed on real `rust-analyzer scip` output that SCIP encodes the module and type hierarchy in symbol descriptors and attributes references to a containing definition via `enclosing_range`, but the SCIP schema has no visibility field (only `is_global_symbol` versus `is_local_symbol`) and no reference-kind taxonomy. For Rust that drops declared visibility (which the encapsulation term depends on) and the `RefKind` distinction the bespoke extractor reads straight from the HIR, and gains nothing. For languages with no bespoke extractor, SCIP is the best available and is type-resolved.
 
-The other candidates (Go, Java and Kotlin, C#, C and C++) have no credible Rust-native semantic resolver. Their resolution lives only in their own toolchains, reachable through external tools such as SCIP indexers or by driving the language compiler. Since every one of those paths is a non-Rust process, they are out of scope for now and deferred. They can be revisited if the "keep it in Rust" constraint is relaxed.
+An earlier idea, in-Rust extractors via `oxc` (TypeScript) and `ruff` (Python), is parked. Those tools do not compute types, so they cannot resolve member access (`obj.method()`), which is where type-resolved graphs differ from parse-level ones. The parked `oxc` walking skeleton remains at `crates/modula-extract-ts` as superseded, not developed further.
 
-## Architecture
+## Deployment model: client computes, server stores
 
-The extraction seam is `Extractor::extract(&req) -> anyhow::Result<CrateGraph>`, with `RaExtractor` and all the `ra_ap_*` dependencies isolated inside `modula-extract`. A new language is a sibling extractor crate that emits a `CrateGraph`. The downstream stack (metrics, findings, report, corpus sweep, web viewer) does not change.
+All extraction and scoring run in the user's environment. `cargo-modula`, in CI or locally, produces the IR: rust-analyzer for Rust, and for other languages a SCIP indexer (run where the project is already built) whose index is lowered into the IR. The user uploads the finished IR. The server only stores it and serves the UI, badge, and share link, and the web viewer scores an uploaded IR in the browser via wasm. There is no server-side indexing, building, or analysis. The build-free case is simply uploading a pre-made IR to the viewer, not handing source to the server.
 
-The shared abstraction lives in a new lean crate `modula-extract-api` (dependencies just `modula-ir` and `anyhow`), so language extractor crates depend on it rather than on the rust-analyzer-heavy `modula-extract`. It holds three layers.
+`cargo-modula` obtains indexers without ad-hoc global installs and never bootstraps base toolchains. The intended priority order is: use an indexer already on `PATH`, else fetch-and-run via the ecosystem runner (`npx`, `uvx`, or a pinned downloaded binary), else accept a prebuilt `--scip` index. This mirrors how Codecov ships a thin uploader plus an official CI action, and how pre-commit pins isolated tool runs.
 
-The construction helper, `CrateGraphBuilder`, owns the IR-construction bookkeeping once so every producer gets it right: dense ids (`items[i].id == ItemId(i)` and likewise for modules and crates), `canonical_path` and `depth` derived from the module tree, module-stub items for every real `mod`, synthetic `ModuleKind::Type` containers for nominal types, edge deduplication into summed weights keyed by `(from, to, kind)` with self-edges dropped, edges by stable symbol key resolved at the end (so forward and cross-file references work, and references to unknown external symbols are dropped), and a final `compute_public_api` pass. The derivation matches the compact-container invariants, so any graph the builder produces round-trips losslessly through the binary IR.
+## The SCIP lowering (shipped)
 
-The per-language `Frontend` trait (language, project detection, and a `populate` step that fills a `CrateGraphBuilder`) is what each new language implements. A blanket `impl<F: Frontend> Extractor for F` turns any frontend into an extractor.
+`crates/modula-extract-scip` lowers a `.scip` index into a `CrateGraph` through the shared `CrateGraphBuilder`. The mapping, validated against real `scip-typescript` output:
 
-The dispatch seam, an object-safe `Extractor` trait plus a `Registry`, makes adding a language "register an extractor", with uniform detection and dispatch for `cargo-modula`, the corpus, and the web flows. The existing Rust path implements `Extractor` directly (its rust-analyzer pipeline already lowers a fully resolved model), and can move onto the builder later.
+- Each SCIP symbol carries descriptors encoding its hierarchy. A `Namespace` (or `Package`) descriptor becomes a `ModuleKind::Mod` module, a `Type` becomes a `ModuleKind::Type` container, and `Method` / `Term` / `Macro` become items. Intermediate namespaces the indexer does not emit on their own (for example `src` and `util` when only the full file path `src/util/math.ts` is emitted) are created on demand by `ensure_module`. SCIP symbol strings are the stable keys the builder expects, and the builder's duplicate-key guard catches a malformed lowering.
+- A definition occurrence carries an `enclosing_range`, so each reference occurrence is attributed to the innermost definition whose range contains it (the edge `from`), with the referenced symbol as the `to`. References to parameters, locals, or external symbols resolve to keys that were never added as items and are dropped at `finish`, as are self-edges.
 
-## Per-language tooling
+Two honest caveats versus a bespoke extractor: SCIP has no visibility field, so everything lowers as `Public` (the encapsulation term is therefore weaker on SCIP languages), and SCIP has no reference-kind taxonomy, so edges collapse to `Import` (when the occurrence has the import role) or `Body`.
 
-| Language | Primary tool | Resolution | Visibility source |
-|---|---|---|---|
-| Rust | rust-analyzer (`RaExtractor`, done) | full | the `Visibility` model directly |
-| JS / TS | `oxc_semantic` + `oxc_resolver` | within-file references plus cross-file import paths (no TS type inference) | `export`, member modifiers |
-| Python | `ruff_python_semantic` (+ `ty` for cross-module) | per-file bindings and imports now, cross-module via `ty` | underscore convention, `__all__` |
-| any (fallback) | tree-sitter | parse-only, no cross-file or type resolution | declared keywords only |
+`cargo modula --scip <file>` lowers, scores, and reports from a prebuilt index, which is exactly what the upload-and-view flow needs.
 
-tree-sitter is the universal parse-only fallback. It cannot resolve names, imports, or types across files, so it would yield materially weaker cohesion and tangle scores. It is a last resort, not a target.
+## Phased deliverables
 
-## IR mapping rules
+1. Done. Pure-Rust SCIP lowering plus `--scip` ingest, proven on TypeScript (`crates/modula-extract-scip`, validated by a committed `scip-typescript` index in `tests/fixtures/sample-ts`).
+2. The `ScipIndexer` descriptor and fetch-and-run orchestration in `cargo-modula` for TypeScript: detect-on-`PATH`, else `npx @sourcegraph/scip-typescript@<pinned>`, run it on the project, then lower. Local `cargo modula <ts-project>` works end to end when Node is present.
+3. Python via `scip-python` (`uvx` or pipx run), reusing the lowering and the `ScipIndexer` plus dialect traits factored out of the TypeScript case.
+4. Go, then JVM, then C# and C/C++, each a thin `ScipIndexer` plus dialect on the shared lowering (`scip-go`, `scip-java`, a Roslyn-based indexer, `scip-clang`).
+5. An official GitHub Action per language (Codecov/CodeQL style) that installs and runs the indexer and uploads the result, so CI users do not assemble the steps by hand.
 
-These conventions apply to every new extractor so the metrics behave consistently across languages.
+The `ScipIndexer` descriptor (tool name, detect-on-`PATH`, the pinned fetch-and-run command, install hint) and a per-indexer dialect (how the global-versus-local flag maps to visibility for that indexer, and any descriptor quirks) are factored out of the first concrete TypeScript case rather than designed up front.
 
-- Module tree: map the language's real namespacing onto `ModuleKind::Mod`. For file-based languages (JS/TS, Python) directories and files are modules, and nested namespace constructs are nested modules. Represent classes, interfaces, and similar nominal types as `ModuleKind::Type` containers holding their members (the builder's `add_type` helper), mirroring the Rust extractor so per-type cohesion clustering is reused.
-- Items: emit one item per function, type, method, constant, and similar declaration, attributed to its owning module.
-- Visibility: map the language's export or visibility model onto `Visibility`. The signal the leak and over-exposure metrics need is exported versus module-local at the boundary, so `export` or public maps to `Public` and non-exported top-level declarations to a local `Private`. Finer member-level modifiers are refined per language. The `Visibility` enum may gain language-specific variants if a model does not map cleanly.
-- Edges: import statements become `Import` edges, type annotations and signatures become `Signature` edges, references in bodies become `Body` edges, and implements or extends relationships become `Impl` or `TraitBound` edges.
-- Public-API reachability: the builder runs `compute_public_api` after the tree and visibilities exist.
+## Critical files
 
-## Cross-cutting concerns
+- `crates/modula-extract-scip/` (shipped): the SCIP lowering, the fixture, and the tests.
+- `crates/modula-extract-api/`: the reused `CrateGraphBuilder` (key-based `add_crate`/`add_module`/`add_type`/`add_item`/`add_edge`/`finish`), the `Extractor`/`Registry` seam, and the `Language` markers.
+- `crates/cargo-modula/src/main.rs`: the `--scip` ingest (shipped), and the indexer orchestration in phase 2.
+- `crates/modula-extract/src/ra.rs`: unchanged, Rust stays bespoke.
+- `crates/modula-extract-ts/`: parked.
+- The `scip` crate (`scip::types::Index`, `scip::symbol::{parse_symbol, is_global_symbol}`), and `rust-analyzer scip` only as a validation aid, not a shipping path.
 
-- Language detection and dispatch in `cargo-modula` via the `Registry`, and how the corpus and web flows select an extractor.
-- Testing: each extractor ships small fixture projects with snapshotted IR and scores, mirroring how the Rust path is tested, plus at least one real-world project scored and sanity-checked.
+## Verification
 
-Because all supported extractors build the `CrateGraph` in process, no language-neutral interchange format is needed. The hosted web service design (Dioxus SPA, axum, Postgres with RLS, treemap, and the rest) is unaffected by which languages are supported, since it consumes the IR and the analysis result. Its decisions are recorded separately.
-
-## Phased plan
-
-Each language is an independent, separately shippable PR. The IR and metrics are stable, so the PRs do not conflict.
-
-### PR 0: the abstraction crate
-
-`modula-extract-api` with the three layers above (`CrateGraphBuilder`, `Frontend`, `Extractor` and `Registry`), the Rust path adapted onto the `Extractor` trait, and `cargo-modula` and the corpus updated to dispatch through the registry. No new language yet, this is the groundwork PR 1 builds on.
-
-### PR 1: TypeScript and JavaScript (oxc)
-
-The pattern-setter. New crate `modula-extract-ts` implementing `Frontend` with `oxc_parser`, `oxc_semantic`, `oxc_ast`, `oxc_resolver`, and the builder, with `cargo-modula` dispatching to it on `tsconfig.json` or a flag.
-
-Internal steps:
-
-1. Walking skeleton: parse a fixture project, build the directory and file module tree with exported items via the builder, run `analyze`, and get a score.
-2. Import edges via `oxc_resolver`.
-3. Within-file reference edges via `oxc_semantic` resolved references.
-4. Type-container modules for classes and interfaces, and the visibility refinements.
-5. Fixture snapshot tests for IR and scores, plus a real repo sanity check.
-
-### PR 2: Python (ruff and ty)
-
-New crate `modula-extract-py` implementing `Frontend` with `ruff_python_semantic` for per-file bindings, imports, and the `__all__` and underscore visibility signals, and `ty` for cross-module resolution. Confirm whether `ty` can be embedded directly at its current pre-1.0 state or must be driven over its protocol, and pin accordingly.
-
-### Deferred: non-Rust-native languages
-
-Go, Java and Kotlin, C#, and C and C++ are out of scope while the Rust-only constraint holds, because each requires driving its own toolchain. If revisited, the cleanest single mechanism is lowering SCIP indexes into `CrateGraph`, which would reuse the builder and add one ingestion path rather than one per language.
-
-## Definition of done per language PR
-
-- The extractor emits a `CrateGraph` for its fixture projects through the builder.
-- `cargo-modula` detects the language and dispatches to it.
-- Snapshot tests cover the IR and the scores on the fixtures.
-- At least one real-world project is scored and sanity-checked.
-- Format, clippy, and tests are green, and this document is updated.
+- Lowering correctness: the committed `.scip` tests assert the nested module chain (including the synthesized intermediates), the `Type` containers, the item kinds, and both the within-file (`add -> double`) and cross-file (`greet -> add`) type-resolved edges, plus that `analyze` succeeds on the lowered graph. The fixture index is regenerated with `npx @sourcegraph/scip-typescript index` in `tests/fixtures/sample-ts` if the source changes, so tests stay network-free.
+- Optional quantified Rust loss: run `rust-analyzer scip` over a corpus sample, lower it, and diff modules, items, edges, and scores against the bespoke extractor to put numbers on what SCIP drops for Rust (expected: visibility and reference-kind detail). This confirms the keep-Rust-bespoke decision rather than changing it.
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, and `cargo test --workspace` stay green at each phase.
 
 ## Risks and open questions
 
-- `oxc` has no Rust-native TypeScript type inference, so body edges through typed objects are not resolved. Acceptable at module granularity, revisit if call-graph precision is needed.
-- `ty` is pre-1.0, so the Python cross-module API may shift. `ruff_python_semantic` covers per-file analysis in the meantime.
-- The `Visibility` enum may need language-specific variants where a model does not map onto the current Rust-shaped set.
+- SCIP carries no visibility, so the encapsulation term is degraded on SCIP languages. The per-indexer dialect can refine this where an indexer's global-versus-local flag tracks export-ness, though `scip-typescript` 0.3 marks non-exported symbols global, so it gives no usable signal there.
+- SCIP indexing needs a buildable, dependency-installed project, so it runs in CI or locally, never on the server.
+- C# and C/C++ indexers were not yet exercised; confirm their output and visibility behavior when those phases land.
