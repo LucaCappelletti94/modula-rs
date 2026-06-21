@@ -87,6 +87,9 @@ pub fn lower(index: &Index) -> Result<CrateGraph> {
 
     let mut module_of_sig: HashMap<Vec<(String, i32)>, ModuleId> = HashMap::new();
     let mut type_modules: HashSet<ModuleId> = HashSet::new();
+    // The symbols that became items: the only valid edge sources. The fallback
+    // attribution below uses this to ignore parameter and local definitions.
+    let mut item_keys: HashSet<&str> = HashSet::new();
     for (key, sym) in &defs {
         let descriptors = &sym.descriptors;
         let n = descriptors.len();
@@ -122,6 +125,7 @@ pub fn lower(index: &Index) -> Result<CrateGraph> {
                     _ => ItemKind::Macro,
                 };
                 builder.add_item(parent, key, name, kind, Visibility::Public);
+                item_keys.insert(key.as_str());
             }
             _ => {}
         }
@@ -129,19 +133,40 @@ pub fn lower(index: &Index) -> Result<CrateGraph> {
 
     // Edges: attribute each reference to the innermost enclosing definition.
     for doc in &index.documents {
+        // Whether this document carries definition `enclosing_range`s at all.
+        // Good indexers (scip-typescript, scip-python, scip-go, scip-java) do, so
+        // a reference is placed in the definition whose range contains it. Some
+        // indexers (scip-dotnet) omit them entirely, so for those documents we
+        // fall back to the nearest preceding item definition.
+        let has_enclosing = doc
+            .occurrences
+            .iter()
+            .any(|occ| occ.symbol_roles & ROLE_DEFINITION != 0 && !occ.enclosing_range.is_empty());
+
         let mut def_ranges: Vec<(&str, Range)> = Vec::new();
+        // Item definitions sorted by start position, for the no-enclosing fallback.
+        let mut item_starts: Vec<(&str, (i32, i32))> = Vec::new();
         for occ in &doc.occurrences {
-            if occ.symbol_roles & ROLE_DEFINITION != 0 {
-                let raw = if occ.enclosing_range.is_empty() {
-                    &occ.range
-                } else {
-                    &occ.enclosing_range
-                };
-                if let Some(range) = Range::from_vec(raw) {
-                    def_ranges.push((&occ.symbol, range));
-                }
+            if occ.symbol_roles & ROLE_DEFINITION == 0 {
+                continue;
+            }
+            let raw = if occ.enclosing_range.is_empty() {
+                &occ.range
+            } else {
+                &occ.enclosing_range
+            };
+            if let Some(range) = Range::from_vec(raw) {
+                def_ranges.push((&occ.symbol, range));
+            }
+            if !has_enclosing
+                && item_keys.contains(occ.symbol.as_str())
+                && let Some(range) = Range::from_vec(&occ.range)
+            {
+                item_starts.push((&occ.symbol, (range.start_line, range.start_char)));
             }
         }
+        item_starts.sort_by_key(|(_, start)| *start);
+
         for occ in &doc.occurrences {
             if occ.symbol_roles & ROLE_DEFINITION != 0 {
                 continue;
@@ -153,7 +178,22 @@ pub fn lower(index: &Index) -> Result<CrateGraph> {
                 .iter()
                 .filter(|(_, range)| range.contains(&reference))
                 .min_by_key(|(_, range)| range.span())
-                .map(|(symbol, _)| *symbol);
+                .map(|(symbol, _)| *symbol)
+                .or_else(|| {
+                    // No enclosing definition. When the indexer omits enclosing
+                    // ranges, attribute the reference to the nearest item defined
+                    // before it. A reference preceding every item (for example a
+                    // file-level namespace use) still has no owner and is dropped.
+                    if has_enclosing {
+                        return None;
+                    }
+                    let point = (reference.start_line, reference.start_char);
+                    item_starts
+                        .iter()
+                        .take_while(|(_, start)| *start <= point)
+                        .last()
+                        .map(|(symbol, _)| *symbol)
+                });
             // A reference with no enclosing definition (for example a Python
             // module-level import, whose module carries no file-spanning range)
             // is intentionally dropped rather than attributed to a synthetic owner.
@@ -516,6 +556,58 @@ impl ScipIndexer for JvmIndexer {
     }
 }
 
+/// The C# (.NET) indexer, `scip-dotnet`.
+///
+/// It loads the project through MSBuild (running `dotnet restore` itself), so the
+/// .NET SDK must be present. Unlike the other indexers there is no clean
+/// fetch-and-run form: `scip-dotnet` is distributed as a stateful global tool
+/// (`dotnet tool install --global scip-dotnet`), so when it is not on `PATH` the
+/// command is `None` and the caller surfaces the install hint. It auto-detects
+/// the `.sln`/`.csproj` in its working directory, so the command runs with `root`
+/// as its working directory and only sets `--output`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DotNetIndexer;
+
+/// Whether `root` directly contains a file with one of `extensions` (a leading
+/// dot each), used to spot a C# solution or project file.
+fn has_file_with_extension(root: &Path, extensions: &[&str]) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| extensions.iter().any(|want| ext.eq_ignore_ascii_case(want)))
+    })
+}
+
+impl ScipIndexer for DotNetIndexer {
+    fn detect(&self, root: &Path) -> bool {
+        has_file_with_extension(root, &["sln", "csproj"])
+    }
+
+    fn command(&self, root: &Path, output: &Path) -> Option<Command> {
+        if on_path("scip-dotnet") {
+            let mut command = Command::new("scip-dotnet");
+            command
+                .current_dir(root)
+                .arg("index")
+                .arg("--output")
+                .arg(output);
+            Some(command)
+        } else {
+            None
+        }
+    }
+
+    fn install_hint(&self) -> &'static str {
+        "install the .NET SDK, then `dotnet tool install --global scip-dotnet`"
+    }
+}
+
 /// The indexer that recognizes the project at `root`, if any.
 #[must_use]
 pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
@@ -524,6 +616,7 @@ pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
         Box::new(PythonIndexer),
         Box::new(GoIndexer),
         Box::new(JvmIndexer),
+        Box::new(DotNetIndexer),
     ];
     indexers.into_iter().find(|indexer| indexer.detect(root))
 }
@@ -728,5 +821,50 @@ mod tests {
                 "coursier artifact spec must precede the index subcommand: {args:?}"
             );
         }
+    }
+
+    fn csharp_fixture() -> std::path::PathBuf {
+        [
+            env!("CARGO_MANIFEST_DIR"),
+            "tests",
+            "fixtures",
+            "sample-csharp",
+        ]
+        .iter()
+        .collect()
+    }
+
+    #[test]
+    fn dotnet_indexer_detects_a_project() {
+        assert!(DotNetIndexer.detect(&csharp_fixture()));
+        assert!(indexer_for(&csharp_fixture()).is_some());
+        assert!(!DotNetIndexer.detect(Path::new("/nonexistent/place")));
+        // The other fixtures carry no .sln/.csproj, so C# never claims them.
+        assert!(!DotNetIndexer.detect(&go_fixture()));
+    }
+
+    #[test]
+    fn dotnet_command_targets_the_output() {
+        let output = Path::new("/tmp/out.scip");
+        let Some(command) = DotNetIndexer.command(&csharp_fixture(), output) else {
+            return; // scip-dotnet not on PATH in this environment.
+        };
+        assert_eq!(
+            command.get_program().to_string_lossy(),
+            "scip-dotnet",
+            "C# has no ephemeral runner, so only the on-PATH binary is used"
+        );
+        // scip-dotnet auto-detects the project in its working directory.
+        assert_eq!(
+            command.get_current_dir(),
+            Some(csharp_fixture().as_path()),
+            "scip-dotnet must run in the project root"
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.iter().any(|a| a == "index"), "{args:?}");
+        assert!(args.iter().any(|a| a == "/tmp/out.scip"), "{args:?}");
     }
 }
