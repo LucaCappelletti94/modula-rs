@@ -154,6 +154,9 @@ pub fn lower(index: &Index) -> Result<CrateGraph> {
                 .filter(|(_, range)| range.contains(&reference))
                 .min_by_key(|(_, range)| range.span())
                 .map(|(symbol, _)| *symbol);
+            // A reference with no enclosing definition (for example a Python
+            // module-level import, whose module carries no file-spanning range)
+            // is intentionally dropped rather than attributed to a synthetic owner.
             let Some(from) = from else {
                 continue;
             };
@@ -356,10 +359,66 @@ impl ScipIndexer for TypeScriptIndexer {
     }
 }
 
+/// The pinned `scip-python` version fetched via `npx` when it is not on `PATH`.
+const SCIP_PYTHON_VERSION: &str = "0.6.6";
+
+/// The Python indexer, `scip-python` (built on pyright, distributed on npm).
+///
+/// Unlike `scip-typescript`, it resolves through the project's installed
+/// environment, so for full results the project's dependencies should be
+/// installed (in CI or locally) before indexing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PythonIndexer;
+
+impl ScipIndexer for PythonIndexer {
+    fn detect(&self, root: &Path) -> bool {
+        root.join("pyproject.toml").is_file()
+            || root.join("setup.py").is_file()
+            || root.join("setup.cfg").is_file()
+    }
+
+    fn command(&self, root: &Path, output: &Path) -> Option<Command> {
+        let project = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("project");
+        fn index_args(command: &mut Command, root: &Path, output: &Path, project: &str) {
+            command
+                .arg("index")
+                .arg("--cwd")
+                .arg(root)
+                .arg("--output")
+                .arg(output)
+                .arg("--project-name")
+                .arg(project)
+                .arg("--quiet");
+        }
+        if on_path("scip-python") {
+            let mut command = Command::new("scip-python");
+            index_args(&mut command, root, output, project);
+            Some(command)
+        } else if on_path("npx") {
+            let mut command = Command::new("npx");
+            command
+                .arg("-y")
+                .arg(format!("@sourcegraph/scip-python@{SCIP_PYTHON_VERSION}"));
+            index_args(&mut command, root, output, project);
+            Some(command)
+        } else {
+            None
+        }
+    }
+
+    fn install_hint(&self) -> &'static str {
+        "install Node so `npx` is available, or `npm i -g @sourcegraph/scip-python`"
+    }
+}
+
 /// The indexer that recognizes the project at `root`, if any.
 #[must_use]
 pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
-    let indexers: Vec<Box<dyn ScipIndexer>> = vec![Box::new(TypeScriptIndexer)];
+    let indexers: Vec<Box<dyn ScipIndexer>> =
+        vec![Box::new(TypeScriptIndexer), Box::new(PythonIndexer)];
     indexers.into_iter().find(|indexer| indexer.detect(root))
 }
 
@@ -426,6 +485,47 @@ mod tests {
         assert!(args.iter().any(|a| a == "/tmp/out.scip"), "{args:?}");
         if program == "npx" {
             let pkg_at = args.iter().position(|a| a.contains("scip-typescript"));
+            assert!(
+                pkg_at < index_at,
+                "npx package spec must precede the index subcommand: {args:?}"
+            );
+        }
+    }
+
+    fn py_fixture() -> std::path::PathBuf {
+        [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", "sample-py"]
+            .iter()
+            .collect()
+    }
+
+    #[test]
+    fn python_indexer_detects_a_project() {
+        assert!(PythonIndexer.detect(&py_fixture()));
+        // A Python project (no package.json or tsconfig.json) routes to Python.
+        assert!(indexer_for(&py_fixture()).is_some());
+        assert!(!PythonIndexer.detect(Path::new("/nonexistent/place")));
+    }
+
+    #[test]
+    fn python_command_targets_the_output() {
+        let output = Path::new("/tmp/out.scip");
+        let Some(command) = PythonIndexer.command(&py_fixture(), output) else {
+            return; // Neither scip-python nor npx on PATH in this environment.
+        };
+        let program = command.get_program().to_string_lossy().into_owned();
+        assert!(
+            program == "npx" || program == "scip-python",
+            "unexpected program {program}"
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let index_at = args.iter().position(|a| a == "index");
+        assert!(index_at.is_some(), "{args:?}");
+        assert!(args.iter().any(|a| a == "/tmp/out.scip"), "{args:?}");
+        if program == "npx" {
+            let pkg_at = args.iter().position(|a| a.contains("scip-python"));
             assert!(
                 pkg_at < index_at,
                 "npx package spec must precede the index subcommand: {args:?}"

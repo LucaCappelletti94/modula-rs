@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sample-py"
+version = "0.0.0"
+
+[tool.setuptools]
+packages = ["sample_py"]
+
+[tool.pyright]
+include = ["sample_py"]
