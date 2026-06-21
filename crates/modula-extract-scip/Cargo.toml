@@ -14,6 +14,7 @@ modula-extract-api.workspace = true
 anyhow.workspace = true
 scip = "0.8"
 protobuf = "=3.7.2"
+tempfile = "3"
 
 [dev-dependencies]
 modula-metrics.workspace = true

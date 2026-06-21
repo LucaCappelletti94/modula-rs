@@ -21,6 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context as _, Result};
 use modula_extract_api::CrateGraphBuilder;
@@ -291,5 +292,144 @@ impl Range {
             self.end_line - self.start_line,
             self.end_char - self.start_char,
         )
+    }
+}
+
+/// A per-language SCIP indexer that modula can run to produce a `.scip` index.
+///
+/// Indexing happens in the user's environment (a built, dependency-installed
+/// project), so this only assembles and runs a command, preferring an indexer
+/// already on `PATH` and otherwise an ecosystem runner with a pinned version.
+pub trait ScipIndexer {
+    /// Whether `root` looks like a project this indexer handles.
+    fn detect(&self, root: &Path) -> bool;
+
+    /// The command that indexes `root`, writing the index to `output`. Prefers an
+    /// on-`PATH` binary, else an ecosystem runner. `None` when neither is
+    /// available, in which case the caller surfaces [`install_hint`](Self::install_hint).
+    fn command(&self, root: &Path, output: &Path) -> Option<Command>;
+
+    /// A one-line hint shown when the indexer cannot be assembled.
+    fn install_hint(&self) -> &'static str;
+}
+
+/// The pinned `scip-typescript` version fetched via `npx` when it is not on `PATH`.
+const SCIP_TYPESCRIPT_VERSION: &str = "0.3.16";
+
+/// The TypeScript and JavaScript indexer, `scip-typescript`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TypeScriptIndexer;
+
+impl ScipIndexer for TypeScriptIndexer {
+    fn detect(&self, root: &Path) -> bool {
+        root.join("tsconfig.json").is_file() || root.join("package.json").is_file()
+    }
+
+    fn command(&self, root: &Path, output: &Path) -> Option<Command> {
+        fn index_args(command: &mut Command, root: &Path, output: &Path) {
+            command
+                .arg("index")
+                .arg("--cwd")
+                .arg(root)
+                .arg("--output")
+                .arg(output)
+                .arg("--no-progress-bar");
+        }
+        if on_path("scip-typescript") {
+            let mut command = Command::new("scip-typescript");
+            index_args(&mut command, root, output);
+            Some(command)
+        } else if on_path("npx") {
+            let mut command = Command::new("npx");
+            command.arg("-y").arg(format!(
+                "@sourcegraph/scip-typescript@{SCIP_TYPESCRIPT_VERSION}"
+            ));
+            index_args(&mut command, root, output);
+            Some(command)
+        } else {
+            None
+        }
+    }
+
+    fn install_hint(&self) -> &'static str {
+        "install Node so `npx` is available, or `npm i -g @sourcegraph/scip-typescript`"
+    }
+}
+
+/// The indexer that recognizes the project at `root`, if any.
+#[must_use]
+pub fn indexer_for(root: &Path) -> Option<Box<dyn ScipIndexer>> {
+    let indexers: Vec<Box<dyn ScipIndexer>> = vec![Box::new(TypeScriptIndexer)];
+    indexers.into_iter().find(|indexer| indexer.detect(root))
+}
+
+/// Runs an indexer over `root` to a temporary index and lowers it. The index is
+/// written into a private temp directory (unpredictable name, removed on every
+/// exit path when the guard drops), avoiding shared-`/tmp` hazards and leaks.
+pub fn run_indexer(indexer: &dyn ScipIndexer, root: &Path) -> Result<CrateGraph> {
+    let dir = tempfile::Builder::new()
+        .prefix("modula-scip-")
+        .tempdir()
+        .context("creating a temp directory for the SCIP index")?;
+    let output = dir.path().join("index.scip");
+    let mut command = indexer
+        .command(root, &output)
+        .ok_or_else(|| anyhow::anyhow!("no SCIP indexer available: {}", indexer.install_hint()))?;
+    let status = command.status().context("running the SCIP indexer")?;
+    anyhow::ensure!(status.success(), "the SCIP indexer exited with {status}");
+    // `lower_path` reads the file fully into memory, so `dir` may drop after.
+    lower_path(&output)
+}
+
+/// Whether an executable named `program` is found on `PATH`. Unix-oriented: it
+/// does not consult Windows `PATHEXT` (`.cmd`/`.exe`), so on Windows the caller
+/// falls back to the install hint.
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> std::path::PathBuf {
+        [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", "sample-ts"]
+            .iter()
+            .collect()
+    }
+
+    #[test]
+    fn typescript_indexer_detects_a_project() {
+        assert!(TypeScriptIndexer.detect(&fixture()));
+        assert!(indexer_for(&fixture()).is_some());
+        assert!(!TypeScriptIndexer.detect(Path::new("/nonexistent/place")));
+    }
+
+    #[test]
+    fn typescript_command_targets_the_output() {
+        let output = Path::new("/tmp/out.scip");
+        let Some(command) = TypeScriptIndexer.command(&fixture(), output) else {
+            return; // Neither scip-typescript nor npx on PATH in this environment.
+        };
+        let program = command.get_program().to_string_lossy().into_owned();
+        assert!(
+            program == "npx" || program == "scip-typescript",
+            "unexpected program {program}"
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let index_at = args.iter().position(|a| a == "index");
+        assert!(index_at.is_some(), "{args:?}");
+        assert!(args.iter().any(|a| a == "/tmp/out.scip"), "{args:?}");
+        if program == "npx" {
+            let pkg_at = args.iter().position(|a| a.contains("scip-typescript"));
+            assert!(
+                pkg_at < index_at,
+                "npx package spec must precede the index subcommand: {args:?}"
+            );
+        }
     }
 }

@@ -111,7 +111,7 @@ fn directory_without_manifest_errors() {
     assert!(!output.status.success(), "expected failure exit");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("could not detect a supported language"),
+        stderr.contains("could not detect a supported project"),
         "stderr: {stderr}"
     );
 }

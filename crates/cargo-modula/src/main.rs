@@ -90,18 +90,28 @@ fn run(args: &Args) -> anyhow::Result<bool> {
             "path does not exist: {}",
             args.path.display()
         );
-        let request = ExtractRequest {
-            root: args.path.clone(),
-            language: None,
-            options: ExtractOptions {
-                include_dependencies: false,
-                member: args.package.clone(),
-                all_members: args.workspace,
-            },
-        };
         let mut registry = Registry::new();
         registry.register(Box::new(RaExtractor));
-        registry.extract(&request).context("extraction failed")?
+        if registry.detect(&args.path).is_some() {
+            let request = ExtractRequest {
+                root: args.path.clone(),
+                language: None,
+                options: ExtractOptions {
+                    include_dependencies: false,
+                    member: args.package.clone(),
+                    all_members: args.workspace,
+                },
+            };
+            registry.extract(&request).context("extraction failed")?
+        } else if let Some(indexer) = modula_extract_scip::indexer_for(&args.path) {
+            modula_extract_scip::run_indexer(indexer.as_ref(), &args.path)
+                .context("indexing failed")?
+        } else {
+            anyhow::bail!(
+                "could not detect a supported project at {}",
+                args.path.display()
+            )
+        }
     };
 
     if args.emit_ir {
