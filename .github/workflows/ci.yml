@@ -8,17 +8,20 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   # Fast tier: the pure crates (no rust-analyzer). These build and test in seconds.
   fast:
     name: Fast (ir + metrics)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy (ir + metrics)
@@ -38,11 +41,11 @@ jobs:
     name: Slow (extract + cli)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rust-src, rust-analyzer
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Clippy (extract + cli)
         run: cargo clippy -p modula-extract -p cargo-modula --all-targets -- -D warnings
       - name: Test (extract + cli, including ignored integration tests)
@@ -67,12 +70,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: cargo-mutants
       - name: Diff against the base branch
@@ -87,9 +90,9 @@ jobs:
     name: MSRV (1.95)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@1.95.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build pure crates on the MSRV toolchain
         run: cargo check -p modula-ir -p modula-metrics --all-targets
 
@@ -101,8 +104,8 @@ jobs:
     name: Actions (actionlint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: actionlint
       - name: Lint workflows
@@ -114,8 +117,8 @@ jobs:
     name: Hygiene (machete + typos)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: cargo-machete,typos
       - name: Unused dependencies
@@ -129,12 +132,12 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools, rust-src, rust-analyzer
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: cargo-llvm-cov
       # `modula-corpus` is excluded: it is unshipped I/O orchestration tooling
@@ -149,9 +152,9 @@ jobs:
     name: Security (audit + deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: cargo-audit,cargo-deny
       - name: Audit (RUSTSEC advisories)

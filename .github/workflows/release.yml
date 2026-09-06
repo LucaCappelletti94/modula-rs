@@ -22,7 +22,7 @@ jobs:
     name: Verify tag matches the crate version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Compare the tag to Cargo.toml
         run: |
           version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
@@ -55,11 +55,11 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.target }}
       - name: Build
@@ -78,7 +78,7 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/cargo-modula.exe" -DestinationPath $archive
           "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Attach to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: ${{ env.ASSET }}
           fail_on_unmatched_files: true
