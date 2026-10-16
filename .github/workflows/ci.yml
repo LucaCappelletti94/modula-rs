@@ -45,11 +45,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rust-src, rust-analyzer
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        with:
+          tool: cargo-nextest
       - name: Clippy (extract + cli)
         run: cargo clippy -p modula-extract -p cargo-modula --all-targets -- -D warnings
       - name: Test (extract + cli, including ignored integration tests)
-        run: cargo test -p modula-extract -p cargo-modula -- --include-ignored
+        run: cargo nextest run -p modula-extract -p cargo-modula --profile ci --run-ignored all
       - name: Docs (extract + cli)
         run: cargo doc -p modula-extract -p cargo-modula --no-deps
         env:
@@ -139,12 +141,14 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
-          tool: cargo-llvm-cov
+          tool: cargo-llvm-cov,cargo-nextest
       # `modula-corpus` is excluded: it is unshipped I/O orchestration tooling
       # that cannot reach 90% line coverage (its pure logic is unit-tested in the
       # slow job). Excluding it also keeps this job from building diesel/plotters.
       - name: Coverage (fail under 90% lines)
-        run: cargo llvm-cov --workspace --exclude modula-corpus --fail-under-lines 90 -- --include-ignored
+        run: |
+          cargo llvm-cov --no-report --workspace --exclude modula-corpus nextest --profile ci --run-ignored all
+          cargo llvm-cov report --fail-under-lines 90
 
   # Supply-chain checks: RUSTSEC advisories (cargo audit) and license/duplicate
   # policy (cargo deny). Neither builds the project, so this job is quick.
