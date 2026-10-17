@@ -1,6 +1,4 @@
-# CI profile: report every failure, and warn when a test's duration regresses.
-# slow-timeout is sized from the heaviest extraction test measured at 4-way
-# concurrency (about 170 s locally, longer on a 4-core runner).
+# The heaviest extraction test takes about 170 s at 4-way concurrency, so a test past five minutes is reported as slow.
 [profile.ci]
 fail-fast = false
 failure-output = "immediate-final"
