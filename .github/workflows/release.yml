@@ -48,16 +48,17 @@ jobs:
           # Both macOS targets build on the arm64 runner. The x86_64 one
           # cross-compiles, which links cleanly because the macOS SDK is
           # universal. This avoids depending on a retired Intel runner label.
-          - os: macos-14
+          - os: macos-26
             target: x86_64-apple-darwin
-          - os: macos-14
+          - os: macos-26
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
