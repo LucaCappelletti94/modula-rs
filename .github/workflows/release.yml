@@ -48,9 +48,9 @@ jobs:
           # Both macOS targets build on the arm64 runner. The x86_64 one
           # cross-compiles, which links cleanly because the macOS SDK is
           # universal. This avoids depending on a retired Intel runner label.
-          - os: macos-14
+          - os: macos-26
             target: x86_64-apple-darwin
-          - os: macos-14
+          - os: macos-26
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
