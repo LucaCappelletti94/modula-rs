@@ -45,6 +45,9 @@ runs:
   steps:
     - name: Install cargo-modula
       shell: bash
+      env:
+        MODULA_VERSION: ${{ inputs.version }}
+        MODULA_REPOSITORY: ${{ inputs.repository }}
       run: |
         set -euo pipefail
         case "${RUNNER_OS}/${RUNNER_ARCH}" in
@@ -58,10 +61,10 @@ runs:
             ;;
         esac
         asset="cargo-modula-${target}.tar.gz"
-        if [ "${{ inputs.version }}" = "latest" ]; then
-          url="https://github.com/${{ inputs.repository }}/releases/latest/download/${asset}"
+        if [ "$MODULA_VERSION" = "latest" ]; then
+          url="https://github.com/${MODULA_REPOSITORY}/releases/latest/download/${asset}"
         else
-          url="https://github.com/${{ inputs.repository }}/releases/download/${{ inputs.version }}/${asset}"
+          url="https://github.com/${MODULA_REPOSITORY}/releases/download/${MODULA_VERSION}/${asset}"
         fi
         dir="${RUNNER_TEMP}/modula-bin"
         mkdir -p "$dir"
@@ -74,21 +77,27 @@ runs:
     - name: Score
       id: score
       shell: bash
+      env:
+        MODULA_PATH: ${{ inputs.path }}
+        MODULA_MIN_HEADLINE: ${{ inputs.min-headline }}
+        MODULA_REQUIRE_ACYCLIC: ${{ inputs.require-acyclic }}
+        MODULA_MAX_OVEREXPOSED: ${{ inputs.max-overexposed }}
+        MODULA_UPLOAD: ${{ inputs.upload }}
       run: |
         set -uo pipefail
-        args=(modula "${{ inputs.path }}")
-        if [ -n "${{ inputs.min-headline }}" ]; then
-          args+=(--min-headline "${{ inputs.min-headline }}")
+        args=(modula "$MODULA_PATH")
+        if [ -n "$MODULA_MIN_HEADLINE" ]; then
+          args+=(--min-headline "$MODULA_MIN_HEADLINE")
         fi
-        if [ "${{ inputs.require-acyclic }}" = "true" ]; then
+        if [ "$MODULA_REQUIRE_ACYCLIC" = "true" ]; then
           args+=(--require-acyclic)
         fi
-        if [ -n "${{ inputs.max-overexposed }}" ]; then
-          args+=(--max-overexposed "${{ inputs.max-overexposed }}")
+        if [ -n "$MODULA_MAX_OVEREXPOSED" ]; then
+          args+=(--max-overexposed "$MODULA_MAX_OVEREXPOSED")
         fi
         # Emit the IR during this same scoring run so the upload step reuses it
         # instead of extracting a second time. Skipped when upload is off.
-        if [ "${{ inputs.upload }}" != "false" ]; then
+        if [ "$MODULA_UPLOAD" != "false" ]; then
           args+=(--emit-ir-to "${RUNNER_TEMP}/modula-ir.bin")
         fi
         report="${RUNNER_TEMP}/modula-report.txt"
@@ -107,9 +116,12 @@ runs:
 
     - name: Upload IR to the portal
       shell: bash
+      env:
+        MODULA_UPLOAD: ${{ inputs.upload }}
+        MODULA_PORTAL_URL: ${{ inputs.portal-url }}
       run: |
         set -uo pipefail
-        upload="${{ inputs.upload }}"
+        upload="$MODULA_UPLOAD"
         if [ "$upload" = "false" ]; then
           echo "Upload disabled."
           exit 0
@@ -130,7 +142,7 @@ runs:
           echo "::warning::no IR was emitted (analysis may have failed), skipping upload."
           exit 0
         fi
-        url="${{ inputs.portal-url }}"
+        url="$MODULA_PORTAL_URL"
         echo "Uploading IR ($(wc -c < "$ir") bytes) to ${url}"
         http=$(curl -sS -o /dev/null -w '%{http_code}' \
           -X POST "$url" \
@@ -148,9 +160,11 @@ runs:
 
     - name: Enforce gates
       shell: bash
+      env:
+        MODULA_EXIT_CODE: ${{ steps.score.outputs.exit-code }}
       run: |
         set -euo pipefail
-        code="${{ steps.score.outputs.exit-code }}"
+        code="$MODULA_EXIT_CODE"
         case "$code" in
           0)
             echo "modula gates passed."

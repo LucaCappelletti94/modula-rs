@@ -79,7 +79,9 @@ jobs:
         with:
           tool: cargo-mutants
       - name: Diff against the base branch
-        run: git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git diff "origin/${BASE_REF}...HEAD" > pr.diff
       - name: Mutation-test changed lines
         run: cargo mutants --in-diff pr.diff -j 4
 
