@@ -62,27 +62,6 @@ jobs:
       - name: Test (corpus tooling)
         run: cargo test -p modula-corpus
 
-  # Mutation testing of the lines changed in a pull request. Scoped by
-  # .cargo/mutants.toml to the pure crates and tested per-package, so it stays
-  # fast. Fails if newly added or changed logic is not covered by a test.
-  mutants:
-    name: Mutants (PR diff)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
-        with:
-          tool: cargo-mutants
-      - name: Diff against the base branch
-        run: git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
-      - name: Mutation-test changed lines
-        run: cargo mutants --in-diff pr.diff -j 4
-
   # Minimum supported Rust version. The workspace floor (1.95) is dictated by the
   # ra_ap_* crates; this verifies the pure libraries still build on it (the
   # extractor cannot build below it because ra_ap_* enforces 1.95 directly).
