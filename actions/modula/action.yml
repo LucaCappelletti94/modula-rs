@@ -50,10 +50,8 @@ runs:
         case "${RUNNER_OS}/${RUNNER_ARCH}" in
           Linux/X64)   target=x86_64-unknown-linux-gnu ;;
           Linux/ARM64) target=aarch64-unknown-linux-gnu ;;
-          macOS/X64)   target=x86_64-apple-darwin ;;
-          macOS/ARM64) target=aarch64-apple-darwin ;;
           *)
-            echo "::error::the modula action supports Linux and macOS runners, not ${RUNNER_OS}/${RUNNER_ARCH}. Windows binaries are published on the release for manual use."
+            echo "::error::the modula action supports Linux runners, not ${RUNNER_OS}/${RUNNER_ARCH}."
             exit 1
             ;;
         esac
