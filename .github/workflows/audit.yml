@@ -1,0 +1,40 @@
+name: Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - '**/Cargo.toml'
+      - deny.toml
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+      - '**/Cargo.toml'
+      - deny.toml
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  schedule:
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  # Supply-chain checks: RUSTSEC advisories (cargo audit) and license/duplicate
+  # policy (cargo deny). Neither builds the project, so this job is quick.
+  security:
+    name: Security (audit + deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Audit (RUSTSEC advisories)
+        run: cargo audit
+      - name: Deny (licenses + bans)
+        run: cargo deny check licenses bans
