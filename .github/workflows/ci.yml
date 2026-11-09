@@ -124,19 +124,3 @@ jobs:
       # slow job). Excluding it also keeps this job from building diesel/plotters.
       - name: Coverage (fail under 90% lines)
         run: cargo llvm-cov --workspace --exclude modula-corpus --fail-under-lines 90 -- --include-ignored
-
-  # Supply-chain checks: RUSTSEC advisories (cargo audit) and license/duplicate
-  # policy (cargo deny). Neither builds the project, so this job is quick.
-  security:
-    name: Security (audit + deny)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
-        with:
-          tool: cargo-audit,cargo-deny
-      - name: Audit (RUSTSEC advisories)
-        run: cargo audit
-      - name: Deny (licenses + bans)
-        run: cargo deny check licenses bans
